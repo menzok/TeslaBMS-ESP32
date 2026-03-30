@@ -157,6 +157,7 @@ void setup() {
     SERIALCONSOLE.println("Init BMS board numbers");
     bms.renumberBoardIDs();
     bms.clearFaults();
+    bms.findBoards();
 
     // ==================== YOUR PROVEN WORKING WIFI BLOCK ====================
     SERIALCONSOLE.print("SSID: ");
@@ -246,6 +247,6 @@ void loop() {
 
         mqtt.publish("teslabms/battery", json);
 
-        SERIALCONSOLE.printf("Published JSON → SOC:%d%% V:%.2fV Alarms:0x%02X\n", soc, packV, alarms);
+        //SERIALCONSOLE.printf("Published JSON → SOC:%d%% V:%.2fV Alarms:0x%02X\n", soc, packV, alarms);
     }
 }
