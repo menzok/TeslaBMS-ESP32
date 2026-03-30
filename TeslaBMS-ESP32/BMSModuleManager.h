@@ -2,14 +2,17 @@
 #include "config.h"
 #include "BMSModule.h"
 
+// Forward declaration – SafetyController.h includes BMSModuleManager.h,
+// so we use a pointer + forward declaration to break the cycle.
+class SafetyController;
 
 class BMSModuleManager
 {
 public:
     BMSModuleManager();
     int seriescells();
-    void clearmodules();
-    void StopBalancing();
+    void clearmodules();    // UNUSED: never called externally — candidate for removal
+    void StopBalancing();   // UNUSED: never called externally — candidate for removal
     void balanceCells();
     void setupBoards();
     void findBoards();
@@ -28,47 +31,58 @@ public:
     float getAvgCellVolt();
     float getLowCellVolt();
     float getHighCellVolt();
-    float getHighVoltage();
-    float getLowVoltage();
+    float getHighVoltage();  // UNUSED: never called — candidate for removal
+    float getLowVoltage();   // UNUSED: never called — candidate for removal
     int getBalancing();
     int getNumModules();
     void printPackSummary();
     void printPackDetails();
-    void setModuleTopology(int series, int parallel);   // NEW
+    void setModuleTopology(int series, int parallel);
     void setCapacityPerStringAh(float ahPerString);
-    float getSOC();                                     // NEW
-    void updateSOC();                                   // NEW
-    void loadSOCFromEEPROM();                           // NEW
-    void saveSOCToEEPROM();                             // NEW
-    void setCurrentAmps(float amps);                    // NEW - shunt stub
-    float getCurrentAmps() { return currentAmps; }      // NEW - getter
+    float getSOC();
+    void updateSOC();
+    void loadSOCFromEEPROM();
+    void saveSOCToEEPROM();
+    void setCurrentAmps(float amps);
+    float getCurrentAmps() { return currentAmps; }
+
+    // --- Master updater ---
+    // Call once per second from loop(). Executes in order:
+    //   balanceCells → getAllVoltTemp → getAvgTemperature → updateSOC → SafetyController::update()
+    void update();
+
+    // Provide the SafetyController instance before the first update() call.
+    void setSafetyController(SafetyController* sc);
 
 private:
-    float packVolt;                         // All modules added together
+    float packVolt;
     int Pstring;
     float LowCellVolt;
     float HighCellVolt;
+    // UNUSED: tracked session extremes but no getter is ever called — candidate for removal
     float lowestPackVolt;
     float highestPackVolt;
+    // UNUSED: tracked session extremes but no getter is ever called — candidate for removal
     float lowestPackTemp;
     float highestPackTemp;
     float highTemp;
     float lowTemp;
-    BMSModule modules[MAX_MODULE_ADDR + 1]; // store data for as many modules as we've configured for.
+    BMSModule modules[MAX_MODULE_ADDR + 1];
     int batteryID;
-    int numFoundModules;                    // The number of modules that seem to exist
+    int numFoundModules;
     bool isFaulted;
     int spack;
     int CellsBalancing;
-    // === NEW: module topology & capacity (loaded from settings in .ino) ===
-    int modulesInSeries = 0;           // will be set by loadSettings()
+    int modulesInSeries = 0;
     int parallelStrings = 0;
     float capacityPerStringAh = 0.0f;
-    float packCapacityAh = 0.0f;       // calculated automatically
+    float packCapacityAh = 0.0f;
     float remainingAh = 0.0f;
     float socPercent = 50.0f;
-    float currentAmps = 0.0f;          // SHUNT STUB
+    float currentAmps = 0.0f;
     unsigned long lastSOCUpdate = 0;
     unsigned long lastSaveMillis = 0;
     unsigned long restStartTime = 0;
+
+    SafetyController* safetyController = nullptr;
 };

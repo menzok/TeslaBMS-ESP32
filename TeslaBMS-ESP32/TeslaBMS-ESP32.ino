@@ -1,6 +1,7 @@
 ﻿#include "Logger.h"
 #include "SerialConsole.h"
 #include "BMSModuleManager.h"
+#include "SafetyController.h"
 
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -16,20 +17,11 @@ const char* password = "gdr543l7";
 const char* mqtt_server = "192.168.1.213";   // ← your Pi IP
 // =======================================================
 
-#define BMS_BAUD  612500
-#define PREFS_NAMESPACE "teslabms"
-
 BMSModuleManager bms;
 EEPROMSettings settings;
+SafetyController safety(bms, settings);
 SerialConsole console;
 uint32_t lastUpdate = 0;
-
-// Safety alarm state tracked across loops to avoid spamming MQTT
-bool alarmOverV = false;
-bool alarmUnderV = false;
-bool alarmOverT = false;
-bool alarmUnderT = false;
-bool alarmCellGap = false;
 
 void saveSettings() {
     prefs.begin(PREFS_NAMESPACE, false);
@@ -81,11 +73,11 @@ void loadSettings() {
         settings.ChargeHys        = 0.05f;
         settings.DischHys         = 0.05f;
         settings.WarnOff          = 0.10f;
-        settings.CellGap          = 0.20f;
+        settings.CellGap          = 0.15f;
         settings.IgnoreVolt       = 0.50f;
         settings.IgnoreTemp       = 0;     // 0 = use both sensors
         settings.OverTSetpoint    = 50.0f;
-        settings.UnderTSetpoint   = -20.0f;
+        settings.UnderTSetpoint   = 0.0f;
         settings.balanceVoltage   = 4.10f;
         settings.balanceHyst      = 0.04f;
         settings.Scells           = 6;
@@ -110,11 +102,11 @@ void loadSettings() {
         settings.ChargeHys        = prefs.getFloat("ChargeHys",  0.05f);
         settings.DischHys         = prefs.getFloat("DischHys",   0.05f);
         settings.WarnOff          = prefs.getFloat("WarnOff",    0.10f);
-        settings.CellGap          = prefs.getFloat("CellGap",    0.20f);
+        settings.CellGap          = prefs.getFloat("CellGap",    0.15f);
         settings.IgnoreVolt       = prefs.getFloat("IgnoreVolt", 0.50f);
         settings.IgnoreTemp       = prefs.getUChar("IgnoreTemp", 0);
         settings.OverTSetpoint    = prefs.getFloat("OverTSP",    50.0f);
-        settings.UnderTSetpoint   = prefs.getFloat("UnderTSP",   -20.0f);
+        settings.UnderTSetpoint   = prefs.getFloat("UnderTSP",   0.0f);
         settings.balanceVoltage   = prefs.getFloat("balanceV",   4.10f);
         settings.balanceHyst      = prefs.getFloat("balanceHyst",0.04f);
         settings.Scells           = prefs.getInt  ("Scells",     6);
@@ -129,32 +121,12 @@ void loadSettings() {
     Logger::setLoglevel((Logger::LogLevel)settings.logLevel);
 }
 
-void checkSafetyAlarms() {
-    float highCell = bms.getHighCellVolt();
-    float lowCell  = bms.getLowCellVolt();
-    float highTemp = bms.getHighTemperature();
-    float lowTemp  = bms.getLowTemperature();
-    float cellGap  = highCell - lowCell;
-
-    bool newAlarmOV  = (highCell > settings.OverVSetpoint);
-    bool newAlarmUV  = (lowCell  > 0.5f && lowCell < settings.UnderVSetpoint);  // ignore unpopulated cells
-    bool newAlarmOT  = (highTemp > TEMP_SENSOR_DISCONNECTED && highTemp > settings.OverTSetpoint);
-    bool newAlarmUT  = (highTemp > TEMP_SENSOR_DISCONNECTED && lowTemp  < settings.UnderTSetpoint);
-    bool newAlarmCG  = (cellGap  > settings.CellGap);
-
-    if (newAlarmOV  != alarmOverV)  { if (newAlarmOV)  Logger::warn("ALARM SET: Cell overvoltage: %.3fV (limit %.3fV)",  highCell, settings.OverVSetpoint);  else Logger::info("ALARM CLEAR: Cell overvoltage resolved"); alarmOverV  = newAlarmOV; }
-    if (newAlarmUV  != alarmUnderV) { if (newAlarmUV)  Logger::warn("ALARM SET: Cell undervoltage: %.3fV (limit %.3fV)", lowCell,  settings.UnderVSetpoint); else Logger::info("ALARM CLEAR: Cell undervoltage resolved"); alarmUnderV = newAlarmUV; }
-    if (newAlarmOT  != alarmOverT)  { if (newAlarmOT)  Logger::warn("ALARM SET: Over temperature: %.1fC (limit %.1fC)",  highTemp, settings.OverTSetpoint);  else Logger::info("ALARM CLEAR: Over temperature resolved"); alarmOverT  = newAlarmOT; }
-    if (newAlarmUT  != alarmUnderT) { if (newAlarmUT)  Logger::warn("ALARM SET: Under temperature: %.1fC (limit %.1fC)", lowTemp,  settings.UnderTSetpoint); else Logger::info("ALARM CLEAR: Under temperature resolved"); alarmUnderT = newAlarmUT; }
-    if (newAlarmCG  != alarmCellGap){ if (newAlarmCG)  Logger::warn("ALARM SET: Cell gap too large: %.0fmV (limit %.0fmV)", cellGap*1000.0f, settings.CellGap*1000.0f); else Logger::info("ALARM CLEAR: Cell gap within limits"); alarmCellGap= newAlarmCG; }
-}
-
 void setup() {
     delay(2000);
     SERIALCONSOLE.begin(115200);
     SERIALCONSOLE.println("\n=== TeslaBMS MQTT for dbus-mqtt-devices ===");
 
-    SERIAL.begin(BMS_BAUD, SERIAL_8N1, 16, 17);
+    SERIAL.begin(BMS_BAUD, SERIAL_8N1, BMS_SERIAL_RX_PIN, BMS_SERIAL_TX_PIN);
 
     pinMode(13, INPUT);
     loadSettings();
@@ -162,6 +134,7 @@ void setup() {
     bms.setModuleTopology(settings.modulesInSeries, settings.parallelStrings);
     bms.setCapacityPerStringAh(settings.capacityPerStringAh);
     bms.loadSOCFromEEPROM();
+    bms.setSafetyController(&safety);
     SERIALCONSOLE.println("Init BMS board numbers");
     bms.renumberBoardIDs();
     bms.clearFaults();
@@ -237,13 +210,6 @@ void setup() {
 void loop() {
     console.loop();
 
-    if (millis() > (lastUpdate + 1000)) {
-        lastUpdate = millis();
-        bms.balanceCells();
-        bms.getAllVoltTemp();
-        checkSafetyAlarms();
-    }
-
     if (!mqtt.connected()) {
         mqtt.connect("TeslaBMS");
     }
@@ -252,21 +218,13 @@ void loop() {
     if (millis() - lastUpdate > 1000) {
         lastUpdate = millis();
 
-        float avgCell = bms.getAvgCellVolt();
-        bms.updateSOC();                             // ← NEW: runs coulomb counting + OCV resets
+        // Single master update: balanceCells → getAllVoltTemp → updateSOC → safety.update()
+        bms.update();
 
-        uint8_t soc = (uint8_t)bms.getSOC();
-        float packV = bms.getPackVoltage();
-        float current = bms.getCurrentAmps();
-
-
-        // Build alarm flags bitmask for MQTT
-        uint8_t alarms = 0;
-        if (alarmOverV)   alarms |= 0x01;
-        if (alarmUnderV)  alarms |= 0x02;
-        if (alarmOverT)   alarms |= 0x04;
-        if (alarmUnderT)  alarms |= 0x08;
-        if (alarmCellGap) alarms |= 0x10;
+        uint8_t soc     = (uint8_t)bms.getSOC();
+        float   packV   = bms.getPackVoltage();
+        float   current = bms.getCurrentAmps();
+        uint8_t alarms  = safety.getAlarmBitmask();
 
         char json[192];
 
@@ -279,7 +237,5 @@ void loop() {
             (bms.getHighCellVolt() - bms.getLowCellVolt()) * 1000.0f);
 
         mqtt.publish("teslabms/battery", json);
-
-        //SERIALCONSOLE.printf("Published JSON → SOC:%d%% V:%.2fV Alarms:0x%02X\n", soc, packV, alarms);
     }
 }

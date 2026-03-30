@@ -1,3 +1,7 @@
+// UNUSED: SystemIO is never included or called from the main sketch.
+// systemIO.setup() is not invoked anywhere.
+// Candidate for removal: delete SystemIO.h and SystemIO.cpp if hardware I/O
+// through this abstraction is not needed.
 #pragma once
 
 enum OUTPUTSTATE {

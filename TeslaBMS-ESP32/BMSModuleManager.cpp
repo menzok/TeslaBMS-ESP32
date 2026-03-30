@@ -1,5 +1,6 @@
 #include "config.h"
 #include "BMSModuleManager.h"
+#include "SafetyController.h"
 #include "BMSUtil.h"
 #include "Logger.h"
 #include <Preferences.h>
@@ -722,7 +723,7 @@ void BMSModuleManager::updateSOC()
 void BMSModuleManager::loadSOCFromEEPROM()
 {
     Preferences prefs;
-    prefs.begin("teslabms", true);
+    prefs.begin(PREFS_NAMESPACE, true);
     remainingAh = prefs.getFloat("remainingAh", packCapacityAh * 0.5f);
     prefs.end();
     socPercent = (remainingAh / packCapacityAh) * 100.0f;
@@ -732,8 +733,35 @@ void BMSModuleManager::loadSOCFromEEPROM()
 void BMSModuleManager::saveSOCToEEPROM()
 {
     Preferences prefs;
-    prefs.begin("teslabms", false);
+    prefs.begin(PREFS_NAMESPACE, false);
     prefs.putFloat("remainingAh", remainingAh);
     prefs.end();
     Logger::console("SOC saved to NVS (remainingAh = %.1f Ah)", remainingAh);
+}
+
+// =====================================================================
+// Master updater – call once per second from loop().
+// Executes all BMS work in a single, ordered pass so that every
+// downstream consumer (MQTT, SafetyController, SerialConsole) always
+// reads data that was produced in the same tick.
+// Order: balanceCells → getAllVoltTemp → updateSOC → safety.update()
+// =====================================================================
+void BMSModuleManager::update()
+{
+    balanceCells();
+    getAllVoltTemp();
+    // Explicitly refresh high/low temperature stats so that
+    // getHighTemperature() and getLowTemperature() return current values.
+    getAvgTemperature();
+    updateSOC();
+    if (safetyController) {
+        safetyController->update();
+    } else {
+        Logger::error("BMSModuleManager::update() – no SafetyController registered. Call setSafetyController() in setup().");
+    }
+}
+
+void BMSModuleManager::setSafetyController(SafetyController* sc)
+{
+    safetyController = sc;
 }
