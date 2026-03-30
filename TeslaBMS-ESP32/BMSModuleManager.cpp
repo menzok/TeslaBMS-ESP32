@@ -2,6 +2,7 @@
 #include "BMSModuleManager.h"
 #include "BMSUtil.h"
 #include "Logger.h"
+#include <Preferences.h>
 
 extern EEPROMSettings settings;
 
@@ -291,7 +292,12 @@ void BMSModuleManager::getAllVoltTemp()
     }
 
     // Divide by number of parallel strings for true string voltage
-    if (Pstring > 1) packVolt /= (float)Pstring;
+    // === NEW: proper series/parallel voltage calculation (replaces old Pstring hack) ===
+    if (numFoundModules > 0)
+    {
+        float avgModuleV = packVolt / (float)numFoundModules;
+        packVolt = avgModuleV * (float)modulesInSeries;
+    }
 
     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
     if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
@@ -624,4 +630,110 @@ void BMSModuleManager::setSensors(int sensor, float Ignore)
             modules[x].setIgnoreCell(Ignore);
         }
     }
+}
+void BMSModuleManager::setModuleTopology(int series, int parallel)
+{
+    modulesInSeries = (series > 0) ? series : 1;
+    parallelStrings = (parallel > 0) ? parallel : 1;
+
+    // Auto-calculate total pack capacity from the per-string value
+    packCapacityAh = capacityPerStringAh * (float)parallelStrings;
+    remainingAh = (socPercent / 100.0f) * packCapacityAh;
+}
+
+void BMSModuleManager::setCapacityPerStringAh(float ahPerString)
+{
+    capacityPerStringAh = (ahPerString > 0.0f) ? ahPerString : 232.0f;
+
+    // Re-calculate total pack Ah
+    packCapacityAh = capacityPerStringAh * (float)parallelStrings;
+    remainingAh = (socPercent / 100.0f) * packCapacityAh;
+}
+
+void BMSModuleManager::setCurrentAmps(float amps)
+{
+    currentAmps = amps;   // Victron shunt stub — call this later from MQTT
+}
+
+float BMSModuleManager::getSOC()
+{
+    return constrain(socPercent, 0.0f, 100.0f);
+}
+
+float getSOCFromOCV(float avgCellV)
+{
+    const float ocvTable[11][2] = {
+        {0.0f, 2.80f}, {10.0f, 3.30f}, {20.0f, 3.45f}, {30.0f, 3.55f},
+        {40.0f, 3.62f}, {50.0f, 3.68f}, {60.0f, 3.75f}, {70.0f, 3.82f},
+        {80.0f, 3.92f}, {90.0f, 4.05f}, {100.0f, 4.20f}
+    };
+    for (int i = 0; i < 10; i++) {
+        if (avgCellV <= ocvTable[i + 1][1]) {
+            float t = (avgCellV - ocvTable[i][1]) / (ocvTable[i + 1][1] - ocvTable[i][1]);
+            return ocvTable[i][0] + t * (ocvTable[i + 1][0] - ocvTable[i][0]);
+        }
+    }
+    return (avgCellV >= 4.20f) ? 100.0f : 0.0f;
+}
+
+void BMSModuleManager::updateSOC()
+{
+    unsigned long now = millis();
+    float dtHours = (now - lastSOCUpdate) / 3600000.0f;
+    lastSOCUpdate = now;
+
+    float deltaAh = currentAmps * dtHours;
+    remainingAh -= deltaAh;
+    socPercent = (remainingAh / packCapacityAh) * 100.0f;
+
+    float avgCell = getAvgCellVolt();
+
+    // OCV reset after 5 min rest
+    if (fabs(currentAmps) < 0.5f) {
+        if (restStartTime == 0) restStartTime = now;
+        if (now - restStartTime > 300000UL) {
+            float ocvSOC = getSOCFromOCV(avgCell);
+            socPercent = ocvSOC;
+            remainingAh = (ocvSOC / 100.0f) * packCapacityAh;
+            restStartTime = 0;
+        }
+    }
+    else {
+        restStartTime = 0;
+    }
+
+    // Full-charge reset
+    if (avgCell > 4.15f && fabs(currentAmps) < 0.3f) {
+        socPercent = 100.0f;
+        remainingAh = packCapacityAh;
+    }
+
+    // Clamp
+    if (socPercent > 100.0f) { socPercent = 100.0f; remainingAh = packCapacityAh; }
+    if (socPercent < 0.0f) { socPercent = 0.0f;   remainingAh = 0.0f; }
+
+    // Hourly save (exactly once per hour from boot)
+    if (now - lastSaveMillis >= 3600000UL) {
+        saveSOCToEEPROM();
+        lastSaveMillis = now;
+    }
+}
+
+void BMSModuleManager::loadSOCFromEEPROM()
+{
+    Preferences prefs;
+    prefs.begin("teslabms", true);
+    remainingAh = prefs.getFloat("remainingAh", packCapacityAh * 0.5f);
+    prefs.end();
+    socPercent = (remainingAh / packCapacityAh) * 100.0f;
+    lastSaveMillis = millis();
+}
+
+void BMSModuleManager::saveSOCToEEPROM()
+{
+    Preferences prefs;
+    prefs.begin("teslabms", false);
+    prefs.putFloat("remainingAh", remainingAh);
+    prefs.end();
+    Logger::console("SOC saved to NVS (remainingAh = %.1f Ah)", remainingAh);
 }

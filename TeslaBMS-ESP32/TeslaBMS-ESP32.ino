@@ -54,6 +54,9 @@ void saveSettings() {
     prefs.putInt  ("Scells",        settings.Scells);
     prefs.putInt  ("Pstrings",      settings.Pstrings);
     prefs.putUShort("triptime",     settings.triptime);
+    prefs.putInt("modulesInSeries", settings.modulesInSeries);
+    prefs.putInt("parallelStrings", settings.parallelStrings);
+    prefs.putFloat("capacityPerStringAh", settings.capacityPerStringAh);
     prefs.end();
     Logger::console("Settings saved to NVS");
 }
@@ -88,6 +91,9 @@ void loadSettings() {
         settings.Scells           = 6;
         settings.Pstrings         = 1;
         settings.triptime         = 1000;  // 1 second fault persistence before trip
+        settings.modulesInSeries = 2;      // your emulator default
+        settings.parallelStrings = 2;
+        settings.capacityPerStringAh = 232.0f;
         saveSettings();
     } else {
         Logger::console("Loading settings from NVS.");
@@ -114,6 +120,9 @@ void loadSettings() {
         settings.Scells           = prefs.getInt  ("Scells",     6);
         settings.Pstrings         = prefs.getInt  ("Pstrings",   1);
         settings.triptime         = prefs.getUShort("triptime",  1000);
+        settings.modulesInSeries = prefs.getInt("modulesInSeries", 2);
+        settings.parallelStrings = prefs.getInt("parallelStrings", 2);
+        settings.capacityPerStringAh = prefs.getFloat("capacityPerStringAh", 232.0f);
         prefs.end();
     }
 
@@ -150,16 +159,37 @@ void setup() {
     pinMode(13, INPUT);
     loadSettings();
 
-    // Apply sensor/cell ignore settings to manager
-    bms.setPstrings(settings.Pstrings);
-    bms.setSensors(settings.IgnoreTemp, settings.IgnoreVolt);
-
+    bms.setModuleTopology(settings.modulesInSeries, settings.parallelStrings);
+    bms.setCapacityPerStringAh(settings.capacityPerStringAh);
+    bms.loadSOCFromEEPROM();
     SERIALCONSOLE.println("Init BMS board numbers");
     bms.renumberBoardIDs();
     bms.clearFaults();
     bms.findBoards();
 
-    // ==================== YOUR PROVEN WORKING WIFI BLOCK ====================
+    int expectedModules = settings.modulesInSeries * settings.parallelStrings;
+    if (bms.getNumModules() != expectedModules) {
+        Logger::error("=== MODULE COUNT MISMATCH ===");
+        Logger::error("Configured: %d modules in series × %d parallel = %d total",
+            settings.modulesInSeries, settings.parallelStrings, expectedModules);
+        Logger::error("Detected on bus: %d modules", bms.getNumModules());
+        Logger::error("Pack voltage will be INCORRECT until config is fixed!");
+    }
+
+    Logger::console("Pack configured: %dS × %dP | %.0f Ah per string | Total capacity %.0f Ah | SOC = %.1f%%",
+        settings.modulesInSeries, settings.parallelStrings,
+        settings.capacityPerStringAh,
+        settings.capacityPerStringAh * settings.parallelStrings,
+        bms.getSOC());
+
+
+    // Apply sensor/cell ignore settings to manager
+    bms.setPstrings(settings.Pstrings);
+    bms.setSensors(settings.IgnoreTemp, settings.IgnoreVolt);
+   
+
+
+    // ====================  WIFI BLOCK ====================
     SERIALCONSOLE.print("SSID: ");
     SERIALCONSOLE.println(ssid);
     SERIALCONSOLE.print("Password length: ");
@@ -223,9 +253,12 @@ void loop() {
         lastUpdate = millis();
 
         float avgCell = bms.getAvgCellVolt();
-        uint8_t soc = (avgCell >= 4.2f) ? 100 : (avgCell <= 3.0f) ? 0 : (uint8_t)((avgCell - 3.0f) / 1.2f * 100.0f);
+        bms.updateSOC();                             // ← NEW: runs coulomb counting + OCV resets
+
+        uint8_t soc = (uint8_t)bms.getSOC();
         float packV = bms.getPackVoltage();
-        float current = 0.0f;
+        float current = bms.getCurrentAmps();
+
 
         // Build alarm flags bitmask for MQTT
         uint8_t alarms = 0;

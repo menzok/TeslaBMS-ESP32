@@ -41,8 +41,6 @@ extern HardwareSerial Serial2;
 // Temperature below which a sensor is considered disconnected
 #define TEMP_SENSOR_DISCONNECTED -70.0f
 
-#define EEPROM_VERSION      0x11    //update any time EEPROM struct below is changed.
-#define EEPROM_PAGE         0
 
 #define DIN1                55
 #define DIN2                54
@@ -61,23 +59,29 @@ typedef struct {
     uint8_t version;
     uint8_t checksum;
     uint32_t canSpeed;
-    uint8_t batteryID;  //which battery ID should this board associate as on the CAN bus
+    uint8_t batteryID;
     uint8_t logLevel;
-    float OverVSetpoint;    // per-cell overvoltage trip threshold (V)
-    float UnderVSetpoint;   // per-cell undervoltage trip threshold (V)
-    float ChargeVsetpoint;  // per-cell target voltage during charging (V)
-    float DischVsetpoint;   // per-cell minimum voltage during discharge (V)
-    float ChargeHys;        // hysteresis below ChargeVsetpoint before re-enabling charge (V)
-    float DischHys;         // hysteresis above DischVsetpoint before re-enabling discharge (V)
-    float WarnOff;          // voltage offset below OverV or above UnderV to warn before tripping (V)
-    float CellGap;          // maximum allowed voltage gap between highest and lowest cell (V)
-    float IgnoreVolt;       // ignore cells below this voltage (dead-cell detection, V)
-    uint8_t IgnoreTemp;     // 0=use both sensors, 1=sensor1 only, 2=sensor2 only
-    float OverTSetpoint;    // over-temperature trip threshold (°C)
-    float UnderTSetpoint;   // under-temperature trip threshold (°C)
-    float balanceVoltage;   // cell voltage at which balancing activates (V)
-    float balanceHyst;      // how far voltage must drop below balanceVoltage to stop balancing (V)
-    int Scells;             // number of cells in series per module string
-    int Pstrings;           // number of parallel strings
-    uint16_t triptime;      // milliseconds a fault must persist before tripping (ms)
+    float OverVSetpoint;
+    float UnderVSetpoint;
+    float ChargeVsetpoint;
+    float DischVsetpoint;
+    float ChargeHys;
+    float DischHys;
+    float WarnOff;
+    float CellGap;
+    float IgnoreVolt;
+    uint8_t IgnoreTemp;
+    float OverTSetpoint;
+    float UnderTSetpoint;
+    float balanceVoltage;
+    float balanceHyst;
+    int Scells;
+    int Pstrings;
+    uint16_t triptime;
+    // === NEW FIELDS ===
+    int modulesInSeries;      // e.g. 1 or 2 or 4
+    int parallelStrings;      // e.g. 2
+    float capacityPerStringAh; // e.g. 232.0 for one Tesla module/string
 } EEPROMSettings;
+
+#define EEPROM_VERSION 0x15

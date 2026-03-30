@@ -34,6 +34,14 @@ public:
     int getNumModules();
     void printPackSummary();
     void printPackDetails();
+    void setModuleTopology(int series, int parallel);   // NEW
+    void setCapacityPerStringAh(float ahPerString);
+    float getSOC();                                     // NEW
+    void updateSOC();                                   // NEW
+    void loadSOCFromEEPROM();                           // NEW
+    void saveSOCToEEPROM();                             // NEW
+    void setCurrentAmps(float amps);                    // NEW - shunt stub
+    float getCurrentAmps() { return currentAmps; }      // NEW - getter
 
 private:
     float packVolt;                         // All modules added together
@@ -52,4 +60,15 @@ private:
     bool isFaulted;
     int spack;
     int CellsBalancing;
+    // === NEW: module topology & capacity (loaded from settings in .ino) ===
+    int modulesInSeries = 0;           // will be set by loadSettings()
+    int parallelStrings = 0;
+    float capacityPerStringAh = 0.0f;
+    float packCapacityAh = 0.0f;       // calculated automatically
+    float remainingAh = 0.0f;
+    float socPercent = 50.0f;
+    float currentAmps = 0.0f;          // SHUNT STUB
+    unsigned long lastSOCUpdate = 0;
+    unsigned long lastSaveMillis = 0;
+    unsigned long restStartTime = 0;
 };
