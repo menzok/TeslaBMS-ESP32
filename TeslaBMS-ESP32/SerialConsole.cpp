@@ -97,6 +97,7 @@ void SerialConsole::printMenu() {
     Logger::console("   WARNOFF=%f    - Warning offset below/above trip thresholds (V)", settings.WarnOff);
     Logger::console("   CELLGAP=%f    - Max allowed voltage gap between cells (V)", settings.CellGap);
     Logger::console("   IGNOREVOLT=%f - Ignore cells at or below this voltage (V)", settings.IgnoreVolt);
+    Logger::console("   IGNORETEMP=%u  - Temperature sensor selection (0=both, 1=TS1 only, 2=TS2 only)", settings.IgnoreTemp);
     Logger::console("   TEMPLIMHI=%f  - Cell over-temperature trip (C)", settings.OverTSetpoint);
     Logger::console("   TEMPLIMLO=%f  - Cell under-temperature trip (C)", settings.UnderTSetpoint);
     Logger::console("   BALVOLT=%f    - Voltage at which to begin cell balancing (V)", settings.balanceVoltage);
@@ -293,6 +294,14 @@ void SerialConsole::handleConfigCmd() {
             Logger::console("Ignore cell voltage threshold set to %f", settings.IgnoreVolt);
         }
         else Logger::console("Invalid value. Please enter 0.0 to 3.0");
+    } else if (cmdString == String("IGNORETEMP")) {
+        if (newValue >= 0 && newValue <= 2) {
+            settings.IgnoreTemp = (uint8_t)newValue;
+            bms.setSensors(newValue, settings.IgnoreVolt);
+            needEEPROMWrite = true;
+            Logger::console("Temperature sensor selection set to %d (0=both, 1=TS1, 2=TS2)", newValue);
+        }
+        else Logger::console("Invalid value. Enter 0 (both sensors), 1 (TS1 only), or 2 (TS2 only)");
     } else if (cmdString == String("BALVOLT")) {
         if (newFloat >= 0.0f && newFloat <= 6.0f) {
             settings.balanceVoltage = newFloat;
@@ -345,6 +354,35 @@ void SerialConsole::handleShortCmd() {
     case '?':
     case 'H':
         printMenu();
+        break;
+    case 'E':
+        Logger::console("\n===== Current Settings (NVS) =====");
+        Logger::console("  Version     : 0x%02X", settings.version);
+        Logger::console("  Log Level   : %u  (0=debug 1=info 2=warn 3=error 4=off)", settings.logLevel);
+        Logger::console("  CAN Speed   : %u baud", settings.canSpeed);
+        Logger::console("  Battery ID  : %u", settings.batteryID);
+        Logger::console("  Pstrings    : %d  (parallel strings)", settings.Pstrings);
+        Logger::console("  Scells      : %d  (series cells per module)", settings.Scells);
+        Logger::console("--- Voltage Limits ---");
+        Logger::console("  VOLTLIMHI   : %.4f V  (overvoltage trip)", settings.OverVSetpoint);
+        Logger::console("  VOLTLIMLO   : %.4f V  (undervoltage trip)", settings.UnderVSetpoint);
+        Logger::console("  CHARGEVSP   : %.4f V  (charge target)", settings.ChargeVsetpoint);
+        Logger::console("  DISCHVSP    : %.4f V  (discharge cutoff)", settings.DischVsetpoint);
+        Logger::console("  CHARGEHYS   : %.4f V  (charge hysteresis)", settings.ChargeHys);
+        Logger::console("  DISCHHYS    : %.4f V  (discharge hysteresis)", settings.DischHys);
+        Logger::console("  WARNOFF     : %.4f V  (warning offset)", settings.WarnOff);
+        Logger::console("  CELLGAP     : %.4f V  (max cell gap)", settings.CellGap);
+        Logger::console("  IGNOREVOLT  : %.4f V  (ignore cells at/below)", settings.IgnoreVolt);
+        Logger::console("--- Balancing ---");
+        Logger::console("  BALVOLT     : %.4f V  (balance activation)", settings.balanceVoltage);
+        Logger::console("  BALHYST     : %.4f V  (balance hysteresis)", settings.balanceHyst);
+        Logger::console("--- Temperature Limits ---");
+        Logger::console("  TEMPLIMHI   : %.1f C  (over-temp trip)", settings.OverTSetpoint);
+        Logger::console("  TEMPLIMLO   : %.1f C  (under-temp trip)", settings.UnderTSetpoint);
+        Logger::console("  IGNORETEMP  : %u  (0=both 1=TS1 2=TS2)", settings.IgnoreTemp);
+        Logger::console("--- Timing ---");
+        Logger::console("  TRIPTIME    : %u ms  (fault persistence)", settings.triptime);
+        Logger::console("==================================\n");
         break;
     case 'S':
         Logger::console("Sleeping all connected boards");

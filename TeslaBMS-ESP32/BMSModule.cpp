@@ -256,8 +256,7 @@ float BMSModule::getAverageV()
     }
     else
     {
-        scells = x;
-        smiss = 0;
+        smiss = 0;  // counts match — reset the debounce counter
     }
 
     if (x > 0) avgVal /= x;
