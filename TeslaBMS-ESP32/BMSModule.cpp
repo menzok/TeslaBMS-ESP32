@@ -1,6 +1,6 @@
 #include "config.h"
+#include "BMSComm.h"
 #include "BMSModule.h"
-#include "BMSUtil.h"
 #include "Logger.h"
 
 extern EEPROMSettings settings;
@@ -53,7 +53,7 @@ void BMSModule::readStatus()
   payload[0] = moduleAddress << 1; //adresss
   payload[1] = REG_ALERT_STATUS;//Alert Status start
   payload[2] = 0x04;
-  BMSUtil::sendDataWithReply(payload, 3, false, buff, 7);
+  BMSComm::sendDataWithReply(payload, 3, false, buff, 7);
   alerts = buff[3];
   faults = buff[4];
   COVFaults = buff[5];
@@ -90,7 +90,7 @@ void BMSModule::stopBalance()
     payload[0] = moduleAddress << 1;
     payload[1] = REG_BAL_CTRL;
     payload[2] = 0; //write zero to stop all cell balancing
-    BMSUtil::sendDataWithReply(payload, 3, true, buff, 4);
+    BMSComm::sendDataWithReply(payload, 3, true, buff, 4);
     delay(2);
 }
 
@@ -132,21 +132,21 @@ bool BMSModule::readModuleValues()
 
     payload[1] = REG_ADC_CTRL;
     payload[2] = 0b00111101; //ADC Auto mode, read every ADC input we can (Both Temps, Pack, 6 cells)
-    BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+    BMSComm::sendDataWithReply(payload, 3, true, buff, 3);
 
     payload[1] = REG_IO_CTRL;
     payload[2] = 0b00000011; //enable temperature measurement VSS pins
-    BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+    BMSComm::sendDataWithReply(payload, 3, true, buff, 3);
 
     payload[1] = REG_ADC_CONV; //start all ADC conversions
     payload[2] = 1;
-    BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+    BMSComm::sendDataWithReply(payload, 3, true, buff, 3);
 
     payload[1] = REG_GPAI; //start reading registers at the module voltage registers
     payload[2] = 0x12; //read 18 bytes (Each value takes 2 - ModuleV, CellV1-6, Temp1, Temp2)
-    retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 22);
+    retLen = BMSComm::sendDataWithReply(payload, 3, false, buff, 22);
 
-    calcCRC = BMSUtil::genCRC(buff, retLen-1);
+    calcCRC = BMSComm::genCRC(buff, retLen-1);
     Logger::debug("Sent CRC: %x     Calculated CRC: %x", buff[21], calcCRC);
 
     //18 data bytes, address, command, length, and CRC = 22 bytes returned
@@ -202,9 +202,9 @@ bool BMSModule::readModuleValues()
      //turning the temperature wires off here seems to cause weird temperature glitches
    // payload[1] = REG_IO_CTRL;
    // payload[2] = 0b00000000; //turn off temperature measurement pins
-   // BMSUtil::sendData(payload, 3, true);
+   // BMSComm::sendData(payload, 3, true);
    // delay(3);        
-   // BMSUtil::getReply(buff, 50);    //TODO: we're not validating the reply here. Perhaps check to see if a valid reply came back    
+   // BMSComm::getReply(buff, 50);    //TODO: we're not validating the reply here. Perhaps check to see if a valid reply came back    
 
     return retVal;
 }
@@ -376,9 +376,9 @@ void BMSModule::balanceCells()
     payload[0] = moduleAddress << 1;
     payload[1] = REG_BAL_CTRL;
     payload[2] = 0; //writing zero to this register resets balance time and must be done before setting balance resistors again.
-    BMSUtil::sendData(payload, 3, true);
+    BMSComm::sendData(payload, 3, true);
     delay(2);
-    BMSUtil::getReply(buff, 30);
+    BMSComm::getReply(buff, 30);
 
     for (int i = 0; i < 6; i++)
     {
@@ -394,16 +394,16 @@ void BMSModule::balanceCells()
         payload[0] = moduleAddress << 1;
         payload[1] = REG_BAL_TIME;
         payload[2] = 0x82; //balance for two minutes if nobody says otherwise before then
-        BMSUtil::sendData(payload, 3, true);
+        BMSComm::sendData(payload, 3, true);
         delay(2);
-        BMSUtil::getReply(buff, 30);
+        BMSComm::getReply(buff, 30);
 
         payload[0] = moduleAddress << 1;
         payload[1] = REG_BAL_CTRL;
         payload[2] = balance; //write balance state to register
-        BMSUtil::sendData(payload, 3, true);
+        BMSComm::sendData(payload, 3, true);
         delay(2);
-        BMSUtil::getReply(buff, 30);
+        BMSComm::getReply(buff, 30);
 
         if (Logger::isDebug()) //read registers back out to check if everthing is good
         {
@@ -412,16 +412,16 @@ void BMSModule::balanceCells()
             payload[0] = moduleAddress << 1;
             payload[1] = REG_BAL_TIME;
             payload[2] = 1; //expecting only 1 byte back
-            BMSUtil::sendData(payload, 3, false);
+            BMSComm::sendData(payload, 3, false);
             delay(2);
-            BMSUtil::getReply(buff, 30);
+            BMSComm::getReply(buff, 30);
 
             payload[0] = moduleAddress << 1;
             payload[1] = REG_BAL_CTRL;
             payload[2] = 1; //also only gets one byte
-            BMSUtil::sendData(payload, 3, false);
+            BMSComm::sendData(payload, 3, false);
             delay(2);
-            BMSUtil::getReply(buff, 30);
+            BMSComm::getReply(buff, 30);
         }
     }
 }

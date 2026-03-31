@@ -1,6 +1,8 @@
 ﻿#include "Logger.h"
 #include "SerialConsole.h"
 #include "BMSModuleManager.h"
+#include "CurrentShunt.h"
+#include "ContactorControl.h"
 
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -156,6 +158,10 @@ void setup() {
 
     SERIAL.begin(BMS_BAUD, SERIAL_8N1, 16, 17);
 
+    currentShunt.begin();
+    systemIO.setup();          // initialise DOUT/DIN pin modes
+    contactorControl.begin();
+
     pinMode(13, INPUT);
     loadSettings();
 
@@ -237,12 +243,20 @@ void setup() {
 void loop() {
     console.loop();
 
+    // Read current from shunt and pass to BMS for Coulomb-counting SOC.
+    currentShunt.update();
+    bms.setCurrentAmps(currentShunt.getCurrent());
+
     if (millis() > (lastUpdate + 1000)) {
         lastUpdate = millis();
         bms.balanceCells();
         bms.getAllVoltTemp();
         checkSafetyAlarms();
     }
+
+    // Drive contactor state machine — open on any active alarm.
+    bool anyAlarm = alarmOverV || alarmUnderV || alarmOverT || alarmUnderT || alarmCellGap;
+    contactorControl.update(anyAlarm);
 
     if (!mqtt.connected()) {
         mqtt.connect("TeslaBMS");

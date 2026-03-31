@@ -2,44 +2,28 @@
 
 #include <Arduino.h>
 
+// Serial port used for BMS module communication (BQ76PL536A daisy-chain bus).
+// Pins are set in setup(): Serial2.begin(BMS_BAUD, SERIAL_8N1, RX_PIN, TX_PIN).
 extern HardwareSerial Serial2;
 
-//Set to the proper port for your USB connection - SerialUSB on Due (Native) or Serial for Due (Programming) or Teensy
+// USB/UART console — used for debug output and SerialConsole commands.
 #define SERIALCONSOLE   Serial
 
-//Define this to be the serial port the Tesla BMS modules are connected to.
-//On the Due you need to use a USART port (Serial1, Serial2, Serial3) and update the call to serialSpecialInit if not Serial1
-#define SERIAL  Serial2
+// BMS module bus (BQ76PL536A daisy-chain, half-duplex UART at 612500 baud).
+#define SERIAL          Serial2
 
-#define REG_DEV_STATUS      0
-#define REG_GPAI            1
-#define REG_VCELL1          3
-#define REG_VCELL2          5
-#define REG_VCELL3          7
-#define REG_VCELL4          9
-#define REG_VCELL5          0xB
-#define REG_VCELL6          0xD
-#define REG_TEMPERATURE1    0xF
-#define REG_TEMPERATURE2    0x11
-#define REG_ALERT_STATUS    0x20
-#define REG_FAULT_STATUS    0x21
-#define REG_COV_FAULT       0x22
-#define REG_CUV_FAULT       0x23
-#define REG_ADC_CTRL        0x30
-#define REG_IO_CTRL         0x31
-#define REG_BAL_CTRL        0x32
-#define REG_BAL_TIME        0x33
-#define REG_ADC_CONV        0x34
-#define REG_ADDR_CTRL       0x3B
+// Current-shunt emulator bus (simple ASCII protocol, 9600 baud).
+// NOTE: Serial2 is taken by the BMS; assign the shunt to Serial1.
+//       Default ESP32 Serial1 pins are RX=18, TX=19 — change to match hardware.
+#define SERIAL_SHUNT        Serial1
+#define SERIAL_SHUNT_BAUD   9600
+#define SERIAL_SHUNT_RX_PIN 18
+#define SERIAL_SHUNT_TX_PIN 19
 
-#define MAX_MODULE_ADDR     0x3E
-
-// Voltage above which a cell reading is considered invalid (hardware maximum)
-#define CELL_MAX_VALID_VOLT 4.5f
-// Voltage above which a cell reading is treated as an open-circuit/invalid reading
-#define CELL_OPEN_VOLT      60.0f
-// Temperature below which a sensor is considered disconnected
-#define TEMP_SENSOR_DISCONNECTED -70.0f
+// BQ76PL536A register addresses, protocol constants, and validity thresholds
+// are defined in BMSComm.h.  Include it here so that every file that pulls in
+// config.h also gets the register map without a separate include.
+#include "BMSComm.h"
 
 
 #define DIN1                55
