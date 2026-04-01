@@ -28,6 +28,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SERIALCONSOLE_H_
 
 #include "config.h"
+#include "EEPROMSettings.h"
+
 
 class SerialConsole {
 public:

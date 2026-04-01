@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SerialConsole.cpp
  *
  Copyright (c) 2017 EVTV / Collin Kidder
@@ -30,7 +30,6 @@
 
 template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; } //Lets us stream SerialUSB
 
-extern EEPROMSettings settings;
 extern BMSModuleManager bms;
 
 bool printPrettyDisplay;
@@ -64,7 +63,7 @@ void SerialConsole::loop() {
     }
 }
 
-void SerialConsole::printMenu() {   
+void SerialConsole::printMenu() {
     Logger::console("\n*************SYSTEM MENU *****************");
     Logger::console("Enable line endings of some sort (LF, CR, CRLF)");
     Logger::console("Most commands case sensitive\n");
@@ -79,24 +78,27 @@ void SerialConsole::printMenu() {
     Logger::console("   B = Attempt balancing for 5 seconds");
     Logger::console("   p = Toggle output of pack summary every 3 seconds");
     Logger::console("   d = Toggle output of pack details every 3 seconds");
+    Logger::console("   D = Reset ALL settings to factory defaults");
 
     Logger::console("   LOGLEVEL=%i - set log level (0=debug, 1=info, 2=warn, 3=error, 4=off)", Logger::getLogLevel());
-    Logger::console("   CANSPEED=%i - set first CAN bus speed", settings.canSpeed);
 
     Logger::console("\nBATTERY MANAGEMENT CONTROLS\n");
-    Logger::console("   VOLTLIMHI=%f - High limit for cells in volts", settings.OverVSetpoint);
-    Logger::console("   VOLTLIMLO=%f - Low limit for cells in volts", settings.UnderVSetpoint);
-    Logger::console("   TEMPLIMHI=%f - High limit for cell temperature in degrees C", settings.OverTSetpoint);
-    Logger::console("   TEMPLIMLO=%f - Low limit for cell temperature in degrees C", settings.UnderTSetpoint);
-    Logger::console("   BALVOLT=%f - Voltage at which to begin cell balancing", settings.balanceVoltage);
-    Logger::console("   BALHYST=%f - How far voltage must dip before balancing is turned off", settings.balanceHyst);
+    Logger::console("   VOLTLIMHI=%f - High limit for cells in volts", eepromdata.OverVSetpoint);
+    Logger::console("   VOLTLIMLO=%f - Low limit for cells in volts", eepromdata.UnderVSetpoint);
+    Logger::console("   TEMPLIMHI=%f - High limit for cell temperature in degrees C", eepromdata.OverTSetpoint);
+    Logger::console("   TEMPLIMLO=%f - Low limit for cell temperature in degrees C", eepromdata.UnderTSetpoint);
+    Logger::console("   BALVOLT=%f - Voltage at which to begin cell balancing", eepromdata.balanceVoltage);
+    Logger::console("   BALHYST=%f - How far voltage must dip before balancing is turned off", eepromdata.balanceHyst);
 
+
+    /*duplicate definitions?
     float OverVSetpoint;
     float UnderVSetpoint;
     float OverTSetpoint;
     float UnderTSetpoint;
     float balanceVoltage;
     float balanceHyst;
+*/
 }
 
 /*	There is a help menu (press H or h or ?)
@@ -165,82 +167,75 @@ void SerialConsole::handleConfigCmd() {
 
     cmdString.toUpperCase();
 
-    if (cmdString == String("CANSPEED")) {
-        if (newValue >= 33000 && newValue <= 1000000) {
-            settings.canSpeed = newValue;
-            Logger::console("Setting CAN speed to %i", newValue);
-            needEEPROMWrite = true;
-        }
-        else Logger::console("Invalid speed. Enter a value between 33000 and 1000000");
-    } else if (cmdString == String("LOGLEVEL")) {
+    if (cmdString == String("LOGLEVEL")) {
         switch (newValue) {
         case 0:
             Logger::setLoglevel(Logger::Debug);
-            settings.logLevel = 0;
+            eepromdata.logLevel = 0;
             Logger::console("setting loglevel to 'debug'");
             break;
         case 1:
             Logger::setLoglevel(Logger::Info);
-            settings.logLevel = 1;
+            eepromdata.logLevel = 1;
             Logger::console("setting loglevel to 'info'");
             break;
         case 2:
             Logger::console("setting loglevel to 'warning'");
-            settings.logLevel = 2;
+            eepromdata.logLevel = 2;
             Logger::setLoglevel(Logger::Warn);
             break;
         case 3:
             Logger::console("setting loglevel to 'error'");
-            settings.logLevel = 3;
+            eepromdata.logLevel = 3;
             Logger::setLoglevel(Logger::Error);
             break;
         case 4:
             Logger::console("setting loglevel to 'off'");
-            settings.logLevel = 4;
+            eepromdata.logLevel = 4;
             Logger::setLoglevel(Logger::Off);
             break;
         } 
         needEEPROMWrite = true;
     } else if (cmdString == String("VOLTLIMHI")) {
         if (newFloat >= 0.0f && newFloat <= 6.00f) {
-            settings.OverVSetpoint = newFloat; 
+            eepromdata.OverVSetpoint = newFloat;
             needEEPROMWrite = true;
-            Logger::console("Cell Voltage Upper Limit set to: %f", settings.OverVSetpoint);
+            Logger::console("Cell Voltage Upper Limit set to: %f", eepromdata.OverVSetpoint);
         }
         else Logger::console("Invalid upper cell voltage limit. Please enter a value 0.0 to 6.0");
     } else if (cmdString == String("VOLTLIMLO")) {
         if (newFloat >= 0.0f && newFloat <= 6.0f) {
-            settings.UnderVSetpoint = newFloat;
+            eepromdata.UnderVSetpoint = newFloat;
             needEEPROMWrite = true;
-            Logger::console("Cell Voltage Lower Limit set to %f", settings.UnderVSetpoint);
+            Logger::console("Cell Voltage Lower Limit set to %f", eepromdata.UnderVSetpoint);
         }
         else Logger::console("Invalid lower cell voltage limit. Please enter a value 0.0 to 6.0");
     } else if (cmdString == String("BALVOLT")) {
         if (newFloat >= 0.0f && newFloat <= 6.0f) {
-            settings.balanceVoltage = newFloat;
+            eepromdata.balanceVoltage = newFloat;
             needEEPROMWrite = true;
-            Logger::console("Balance voltage set to %f", settings.balanceVoltage);
+            Logger::console("Balance voltage set to %f", eepromdata.balanceVoltage);
         }
         else Logger::console("Invalid balancing voltage. Please enter a value 0.0 to 6.0");
     } else if (cmdString == String("BALHYST")) {
         if (newFloat >= 0.0f && newFloat <= 1.0f) {
-            settings.balanceHyst = newFloat;
+            eepromdata.balanceHyst = newFloat;
             needEEPROMWrite = true;
-            Logger::console("Balance hysteresis set to %f", settings.balanceHyst);
+            Logger::console("Balance hysteresis set to %f", eepromdata.balanceHyst);
         }
         else Logger::console("Invalid balance hysteresis. Please enter a value 0.0 to 1.0");        
     } else if (cmdString == String("TEMPLIMHI")) {
         if (newFloat >= 0.0f && newFloat <= 100.0f) {
-            settings.OverTSetpoint = newFloat;
+            eepromdata.OverTSetpoint = newFloat;
             needEEPROMWrite=true;
-            Logger::console("Module Temperature Upper Limit set to: %f", settings.OverTSetpoint);
+            Logger::console("Module Temperature Upper Limit set to: %f", eepromdata.OverTSetpoint);
         }
         else Logger::console("Invalid temperature upper limit please enter a value 0.0 to 100.0");
     } else if (cmdString == String("TEMPLIMLO")) {
         if (newFloat >= -20.00f && newFloat <= 120.0f) {
-            settings.UnderTSetpoint = newFloat;
+            eepromdata.UnderTSetpoint = newFloat;
             needEEPROMWrite = true;
-            Logger::console("Module Temperature Lower Limit set to: %f", settings.UnderTSetpoint);
+            Logger::console("Module Temperature Lower Limit set to: %f", eepromdata.UnderTSetpoint);
         }
         else Logger::console("Invalid temperature lower limit please enter a value between -20.0 and 120.0");        
     } else {
@@ -248,7 +243,7 @@ void SerialConsole::handleConfigCmd() {
     }
     if (needEEPROMWrite)
     {
-        //EEPROM.write(EEPROM_PAGE, settings);
+        EEPROMSettings::save();
     }
 }
 
@@ -313,6 +308,10 @@ void SerialConsole::handleShortCmd() {
                 Logger::console("No longer displaying pack details.");
             }
         }
+        break;
+    case 'D':                                 // ← NEW: Reset to defaults
+        Logger::console("Resetting all settings to factory defaults...");
+        EEPROMSettings::loadDefaults();
         break;
     }
 }

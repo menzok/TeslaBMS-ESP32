@@ -2,8 +2,10 @@
 #include "BMSModuleManager.h"
 #include "BMSUtil.h"
 #include "Logger.h"
+#include "EEPROMSettings.h"
 
-extern EEPROMSettings settings;
+
+extern EEPROMData eepromdata;
 
 BMSModuleManager::BMSModuleManager()
 {
@@ -242,7 +244,7 @@ void BMSModuleManager::getAllVoltTemp()
     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
     if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
     
-    if ENABLE_FAULT_CHAIN
+    if (ENABLE_FAULT_CHAIN)
     // Fault-chain monitoring (active-low signal from the Tesla modules)
     if (digitalRead(FAULT_CHAIN_PIN) == LOW) {
         if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");

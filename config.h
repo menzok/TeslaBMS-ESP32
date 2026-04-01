@@ -45,19 +45,3 @@ extern HardwareSerial Serial2;
 #define MAX_MODULE_ADDR     0x3E    // Limit of the chip hardware address scheme (0x01-0x3E)
 
 
-// ====================== EEPROM SETTINGS ======================
-// Version and struct used for persistent settings stored in EEPROM.
-
-#define EEPROM_VERSION      0x10    // Update any time the EEPROM struct below is changed.
-
-typedef struct {
-    uint8_t version;
-    uint8_t checksum;
-    uint8_t logLevel;
-    float OverVSetpoint;
-    float UnderVSetpoint;
-    float OverTSetpoint;
-    float UnderTSetpoint;
-    float balanceVoltage;
-    float balanceHyst;
-} EEPROMSettings;

@@ -6,11 +6,12 @@
 
 
 #include "config.h"
+#include "EEPROMSettings.h"
 #include "BMSModule.h"
 #include "BMSUtil.h"
 #include "Logger.h"
 
-extern EEPROMSettings settings;
+extern EEPROMData eepromdata;
 
 BMSModule::BMSModule()      // Constructor for modules init to 0.
 {
@@ -305,9 +306,9 @@ void BMSModule::balanceCells()
 
     for (int i = 0; i < 6; i++)
     {
-        if ( (balanceState[i] == 0) && (getCellVoltage(i) > settings.balanceVoltage) ) balanceState[i] = 1;
+        if ( (balanceState[i] == 0) && (getCellVoltage(i) > eepromdata.balanceVoltage) ) balanceState[i] = 1;
 
-        if ( /*(balanceState[i] == 1) &&*/ (getCellVoltage(i) < (settings.balanceVoltage - settings.balanceHyst)) ) balanceState[i] = 0;
+        if ( /*(balanceState[i] == 1) &&*/ (getCellVoltage(i) < (eepromdata.balanceVoltage - eepromdata.balanceHyst)) ) balanceState[i] = 0;
 
         if (balanceState[i] == 1) balance |= (1<<i);
     }

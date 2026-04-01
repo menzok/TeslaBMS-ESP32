@@ -1,7 +1,7 @@
 ﻿#include "Logger.h"
 #include "SerialConsole.h"
 #include "BMSModuleManager.h"
-
+#include "EEPROMSettings.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 
@@ -17,17 +17,10 @@ const char* mqtt_server = "192.168.1.213";   // ← your Pi IP
 
 
 BMSModuleManager bms;
-EEPROMSettings settings;
 SerialConsole console;
 uint32_t lastUpdate = 0;
 
-void loadSettings() {
-    Logger::console("Resetting to factory defaults");
-    settings.version = EEPROM_VERSION;
-    settings.checksum = 0;
-    settings.logLevel = 2;
-    Logger::setLoglevel((Logger::LogLevel)settings.logLevel);
-}
+
 
 void setup() {
     delay(2000);
@@ -35,7 +28,7 @@ void setup() {
 	SERIALCONSOLE.begin(115200);  // open USB serial for console output
 	SERIAL.begin(BMS_BAUD, SERIAL_8N1, BMS_RX_PIN, BMS_TX_PIN); // Open the hardware serial port for talking to the BMS modules
 	
-    loadSettings();
+	EEPROMSettings::load(); 
 
     SERIALCONSOLE.println("Init BMS board numbers");
     bms.renumberBoardIDs();
