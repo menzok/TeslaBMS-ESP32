@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "Logger.h"
+#include "EEPROMSettings.h"
 
 class Menu {
 public:
@@ -21,10 +22,14 @@ private:
     };
 
     MenuState currentState = ROOT_MENU;
-    bool isMenuOpen = true;           // new flag
+    bool isMenuOpen = true;
     bool printPrettyDisplay = false;
     uint32_t prettyCounter = 0;
     int whichDisplay = 0;
+    int pendingConfig = 0;
+
+    unsigned char cmdBuffer[80];
+    uint8_t ptrBuffer = 0;
 
     void printRootMenu();
     void printConfigMenu();
@@ -37,4 +42,6 @@ private:
     void handleModuleCommand(char c);
     void handleLoggingCommand(char c);
     void handleDefaultsCommand(char c);
+    void handleWaitingForInput();
+    void returnToConfigMenu();
 };
