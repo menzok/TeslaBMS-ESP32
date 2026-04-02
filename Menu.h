@@ -26,7 +26,18 @@ private:
     bool printPrettyDisplay = false;
     uint32_t prettyCounter = 0;
     int whichDisplay = 0;
-    int pendingConfig = 0;
+    enum PendingEdit {
+        NO_EDIT,
+        EDIT_OVER_VOLTAGE,
+        EDIT_UNDER_VOLTAGE,
+        EDIT_OVER_TEMP,
+        EDIT_UNDER_TEMP,
+        EDIT_BALANCE_VOLTAGE,
+        EDIT_BALANCE_HYST
+        // Add new editable fields here — no magic numbers
+    };
+
+    PendingEdit pendingEdit = NO_EDIT;
 
     unsigned char cmdBuffer[80];
     uint8_t ptrBuffer = 0;
