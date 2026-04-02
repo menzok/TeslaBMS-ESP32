@@ -48,3 +48,7 @@ extern HardwareSerial Serial2;
 #define MAX_MODULE_ADDR     0x3E    // Limit of the chip hardware address scheme (0x01-0x3E)
 
 
+// ====================== PIN INITIALIZATION ======================
+inline void initPins() {
+    pinMode(FAULT_CHAIN_PIN, INPUT);
+}

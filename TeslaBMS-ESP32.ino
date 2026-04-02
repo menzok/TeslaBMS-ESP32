@@ -16,11 +16,10 @@ uint32_t lastUpdate = 0;
 
 void setup() {
     delay(2000);
-    pinMode(FAULT_CHAIN_PIN, INPUT); //fault chain monitoring pin
+	initPins(); // Set pin modes for any hardware features (fault chain, etc.)
 	SERIALCONSOLE.begin(115200);  // open USB serial for console output
 	SERIAL.begin(BMS_BAUD, SERIAL_8N1, BMS_RX_PIN, BMS_TX_PIN); // Open the hardware serial port for talking to the BMS modules
-	
-	EEPROMSettings::load(); 
+    EEPROMSettings::load(); // Load any saved settings from EEPROM (e.g. cell count, balancing thresholds, etc.)
 
     SERIALCONSOLE.println("Finding connected boards, RUN Board renumbering on pack change");
 	bms.findBoards();
