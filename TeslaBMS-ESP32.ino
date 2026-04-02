@@ -37,11 +37,6 @@ void loop() {
         bms.getAllVoltTemp();
     }
 
-    if (!mqtt.connected()) {
-        mqtt.connect("TeslaBMS");
-    }
-    mqtt.loop();
-
       if (millis() - lastUpdate > 1000) {
         lastUpdate = millis();
 
