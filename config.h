@@ -20,7 +20,6 @@ extern HardwareSerial Serial2;
 // Configurable pins and enable/disable flags for optional hardware features.
 
 #define FAULT_CHAIN_PIN     13      // GPIO the module fault chain is wired to (active LOW)
-#define ENABLE_FAULT_CHAIN  0       // 1 = enabled (recommended), 0 = disabled
 
 
 // ====================== BQ76PL455A-Q1 CHIP CONSTANTS ======================
