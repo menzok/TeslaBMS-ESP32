@@ -468,3 +468,70 @@ void BMSModuleManager::printPackDetails()
 }
 
 
+BatterySummary BMSModuleManager::getBatterySummary()
+{
+    BatterySummary s;
+
+    s.voltage = getPackVoltage();
+    s.current = 0.0f;
+    s.soc = 50;                                      // same hard-coded value as original
+
+    int temp = (int)getAvgTemperature() + 40;
+    if (temp < 0) temp = 0;
+    s.avgTemp = (int8_t)temp;
+
+    temp = (int)lowestPackTemp + 40;
+    if (temp < 0) temp = 0;
+    s.minTemp = (int8_t)temp;
+
+    temp = (int)highestPackTemp + 40;
+    if (temp < 0) temp = 0;
+    s.maxTemp = (int8_t)temp;
+
+    return s;
+}
+
+ModuleSummary BMSModuleManager::getModuleSummary(int module)
+{
+    ModuleSummary s;
+
+    s.voltage = modules[module].getModuleVoltage();
+    s.current = 0.0f;
+    s.soc = 50;
+
+    int temp = (int)modules[module].getAvgTemp() + 40;
+    if (temp < 0) temp = 0;
+    s.avgTemp = (int8_t)temp;
+
+    temp = (int)modules[module].getLowestTemp() + 40;
+    if (temp < 0) temp = 0;
+    s.minTemp = (int8_t)temp;
+
+    temp = (int)modules[module].getHighestTemp() + 40;
+    if (temp < 0) temp = 0;
+    s.maxTemp = (int8_t)temp;
+
+    return s;
+}
+
+CellDetails BMSModuleManager::getCellDetails(int module, int cell)
+{
+    CellDetails c;
+
+    c.cellVoltage = modules[module].getCellVoltage(cell);
+    c.highestCellVolt = modules[module].getHighestCellVolt();
+    c.lowestCellVolt = modules[module].getLowestCellVolt();
+
+    int temp = modules[module].getHighTemp() + 40;
+    if (temp < 0) temp = 0;
+    c.highTemp = (int8_t)temp;
+
+    c.faultBits = 0;
+
+    return c;
+}
+
+int BMSModuleManager::getNumberOfModules() const
+{
+    return numFoundModules;
+}

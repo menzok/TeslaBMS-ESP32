@@ -13,7 +13,7 @@ public:
     void handleInput(char c);
 
 private:
-    enum MenuState {
+	enum MenuState {  //What menu we are currently in, used to determine what to print and how to handle input
         ROOT_MENU,
         CONFIG_MENU,
         MODULE_MENU,
@@ -27,7 +27,7 @@ private:
     bool printPrettyDisplay = false;
     uint32_t prettyCounter = 0;
     int whichDisplay = 0;
-    enum PendingEdit {
+	enum PendingEdit { //What setting we are currently waiting for input on, used to determine how to handle input and return to the correct menu after input is received
         NO_EDIT,
         EDIT_OVER_VOLTAGE,
         EDIT_UNDER_VOLTAGE,
