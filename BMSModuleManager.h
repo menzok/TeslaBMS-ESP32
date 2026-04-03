@@ -47,8 +47,7 @@ public:
     void sleepBoards();
     void wakeBoards();
     void getAllVoltTemp();
-    // void readSetpoints();  Unused logic from oringinal implementation ...not sure what for... Reading whats stored on the chip? doesnt seem useful since hackaday says the setvalues are upstream... Maybe useful for fault line?
-
+  
     // --- Accessors ---
     BatterySummary getBatterySummary();
     ModuleSummary  getModuleSummary(int module);
@@ -70,5 +69,4 @@ private:
     float     highestPackTemp;
     BMSModule modules[MAX_MODULE_ADDR + 1];      // store data for as many modules as we've configured for
     int       numFoundModules;                   // The number of modules that seem to exist
-    bool      isFaulted;
 };

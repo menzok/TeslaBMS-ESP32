@@ -16,7 +16,6 @@ constexpr float DEFAULT_UNDERTEMP = -10.0f;  // Standard safe lower limit for di
 
 constexpr float DEFAULT_BALANCE_VOLTAGE = 3.95f;   // Balancing starts near full charge so passive bleed resistors can work effectively
 constexpr float DEFAULT_BALANCE_HYST = 0.025f;  // 25mV hysteresis prevents rapid chattering and unnecessary heat
-constexpr uint8_t DEFAULT_ENABLE_FAULT_CHAIN = 0;   // 1 = enabled (recommended), 0 = disabled (use if you don't have a fault chain wired up to BMS Modules)
 
 // ====================== EEPROM Settings Struct ======================
 typedef struct {
@@ -31,7 +30,6 @@ typedef struct {
 
     float balanceVoltage;
     float balanceHyst;
-    uint8_t enableFaultChain;
 } EEPROMData;
 
 extern EEPROMData eepromdata;

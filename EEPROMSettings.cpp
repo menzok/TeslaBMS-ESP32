@@ -21,7 +21,6 @@ void EEPROMSettings::loadDefaults()
     eepromdata.UnderTSetpoint = DEFAULT_UNDERTEMP;
     eepromdata.balanceVoltage = DEFAULT_BALANCE_VOLTAGE;
     eepromdata.balanceHyst = DEFAULT_BALANCE_HYST;
-    eepromdata.enableFaultChain = DEFAULT_ENABLE_FAULT_CHAIN;
 
     Logger::console("Factory defaults loaded");
     save();

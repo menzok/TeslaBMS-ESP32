@@ -17,7 +17,6 @@ BMSModuleManager::BMSModuleManager()
     highestPackVolt = 0.0f;
     lowestPackTemp = 200.0f;
     highestPackTemp = -100.0f;
-    isFaulted = false;
 }
 
 void BMSModuleManager::balanceCells()
@@ -174,7 +173,6 @@ void BMSModuleManager::clearFaults()
     payload[2] = 0x00;//data to clear
     BMSUtil::sendDataWithReply(payload, 3, true, buff, 4);
 
-    isFaulted = false;
 }
 
 /*
@@ -243,18 +241,7 @@ void BMSModuleManager::getAllVoltTemp()
 
     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
     if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
-    
-    if (ENABLE_FAULT_CHAIN)
-    // Fault-chain monitoring (active-low signal from the Tesla modules)
-    if (digitalRead(FAULT_CHAIN_PIN) == LOW) {
-        if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");
-        isFaulted = true;
-    }
-    else
-    {
-        if (isFaulted) Logger::info("All modules have exited a faulted state");
-        isFaulted = false;
-    }
+   
 
 }
 
@@ -298,8 +285,6 @@ void BMSModuleManager::printPackSummary()
     Logger::console("");
     Logger::console("");
     Logger::console("                                     Pack Status:");
-    if (isFaulted) Logger::console("                                       FAULTED!");
-    else Logger::console("                                   All systems go!");
     Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV     Avg Temp: %fC ", numFoundModules, 
                     getPackVoltage(),getAvgCellVolt(), getAvgTemperature());
     Logger::console("");
@@ -427,8 +412,6 @@ void BMSModuleManager::printPackDetails()
     Logger::console("");
     Logger::console("");
     Logger::console("                                         Pack Status:");
-    if (isFaulted) Logger::console("                                           FAULTED!");
-    else Logger::console("                                      All systems go!");
     Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV     Avg Temp: %fC ", numFoundModules, 
                     getPackVoltage(),getAvgCellVolt(), getAvgTemperature());
     Logger::console("");

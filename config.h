@@ -19,8 +19,6 @@ extern HardwareSerial Serial2;
 // ====================== HARDWARE PINS & FEATURES ======================
 // Configurable pins and enable/disable flags for optional hardware features.
 
-#define FAULT_CHAIN_PIN     13      // GPIO the module fault chain is wired to (active LOW)
-
 
 // ====================== BQ76PL455A-Q1 CHIP CONSTANTS ======================
 // These are fixed hardware register addresses and limits inside every Tesla module.
@@ -49,5 +47,5 @@ extern HardwareSerial Serial2;
 
 // ====================== PIN INITIALIZATION ======================
 inline void initPins() {
-    pinMode(FAULT_CHAIN_PIN, INPUT);
+   
 }

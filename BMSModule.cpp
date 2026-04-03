@@ -72,26 +72,6 @@ uint8_t BMSModule::getCUVCells()
     return CUVFaults;
 }
 
-/*
-Reading the setpoints, after a reset the default tesla setpoints are loaded
-Default response : 0x10, 0x80, 0x31, 0x81, 0x08, 0x81, 0x66, 0xff
-*/
-/*
-void BMSModule::readSetpoint()
-{
-  uint8_t payload[3];
-  uint8_t buff[12];
-  payload[0] = moduleAddress << 1; //adresss
-  payload[1] = 0x40;//Alert Status start
-  payload[2] = 0x08;//two registers
-  sendData(payload, 3, false);
-  delay(2);
-  getReply(buff);
-
-  OVolt = 2.0+ (0.05* buff[5]);
-  UVolt = 0.7 + (0.1* buff[7]);
-  Tset = 35 + (5 * (buff[9] >> 4));
-} */
 
 bool BMSModule::readModuleValues()
 {
