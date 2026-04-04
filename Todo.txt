@@ -1,0 +1,4 @@
+Load defaults menu option in config needs to be changed, current version loads ALL defaults, Menu should load that menus default settings only, not all defaults.  
+current implementation in the Vovervolt and undervolt settings... Current sensor has its own defaults, with SOC and ext...
+
+Plan is to create Reset these values to their default setting for each menu option.

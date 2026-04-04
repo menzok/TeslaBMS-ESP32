@@ -18,8 +18,9 @@ extern HardwareSerial Serial2;
 
 // ====================== HARDWARE PINS & FEATURES ======================
 // Configurable pins and enable/disable flags for optional hardware features.
-#define PRECHARGE_RELAY_PIN     25     // GPIO for small pre-charge relay
-#define CONTACTOR_RELAY_PIN     26     // GPIO for main contactor coil
+#define PRECHARGE_RELAY_PIN         25     // GPIO for small pre-charge relay
+#define CONTACTOR_RELAY_PIN         26     // GPIO for main contactor coil
+#define SOC_CURRENT_SENSOR_PIN      34     // ADC pin for current sensor (QN-C15S or similar)
 
 // ====================== BQ76PL455A-Q1 CHIP CONSTANTS ======================
 // These are fixed hardware register addresses and limits inside every Tesla module.

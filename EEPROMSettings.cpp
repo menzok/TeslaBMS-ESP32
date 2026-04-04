@@ -25,6 +25,11 @@ void EEPROMSettings::loadDefaults()
     eepromdata.prechargeEnabled = DEFAULT_PRECHARGE_ENABLED;
     eepromdata.currentSensorPresent = DEFAULT_CURRENT_SENSOR_PRESENT;
     eepromdata.prechargeTimeoutMs = DEFAULT_PRECHARGE_TIMEOUT_MS;
+    eepromdata.currentSensorVbias = DEFAULT_CURRENT_SENSOR_VBIAS;
+    eepromdata.currentSensorVrange = DEFAULT_CURRENT_SENSOR_VRANGE;
+    eepromdata.currentSensorRatedAmps = DEFAULT_CURRENT_SENSOR_RATED_AMPS;
+    eepromdata.socPercent = DEFAULT_SOC_PERCENT;
+    eepromdata.coulombCountAh = DEFAULT_COULOMB_COUNT_AH;
 
     Logger::console("Factory defaults loaded");
     save();
