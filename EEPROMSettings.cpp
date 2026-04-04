@@ -22,6 +22,10 @@ void EEPROMSettings::loadDefaults()
     eepromdata.balanceVoltage = DEFAULT_BALANCE_VOLTAGE;
     eepromdata.balanceHyst = DEFAULT_BALANCE_HYST;
 
+    eepromdata.prechargeEnabled = DEFAULT_PRECHARGE_ENABLED;
+    eepromdata.currentSensorPresent = DEFAULT_CURRENT_SENSOR_PRESENT;
+    eepromdata.prechargeTimeoutMs = DEFAULT_PRECHARGE_TIMEOUT_MS;
+
     Logger::console("Factory defaults loaded");
     save();
 }

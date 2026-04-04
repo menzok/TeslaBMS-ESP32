@@ -31,7 +31,6 @@
 #include "EEPROMSettings.h"
 #include "Logger.h"
 
-
 extern BMSModuleManager bms;
 
 // ======================================================
@@ -64,7 +63,7 @@ void Menu::handleInput(char c) {
     if (c == '\n' || c == '\r') {
         cmdBuffer[ptrBuffer] = 0; // null terminate
 
-        // === MULTIPLE COMMANDS THAT RETURN TO ROOT MENU ===
+        // === COMMANDS THAT RETURN TO ROOT MENU FROM ANYWHERE ===
         if (currentState != WAITING_FOR_INPUT) {
             bool isM = (ptrBuffer == 1 && (cmdBuffer[0] == 'm' || cmdBuffer[0] == 'M'));
             bool isMenu = (ptrBuffer == 4 &&
@@ -92,26 +91,55 @@ void Menu::handleInput(char c) {
             handleWaitingForInput();
         }
         else if (ptrBuffer == 1) {
-            // Single character menu command
             char cmd = cmdBuffer[0];
             switch (currentState) {
-            case ROOT_MENU:     handleRootCommand(cmd);     break;
-            case CONFIG_MENU:   handleConfigCommand(cmd);   break;
-            case MODULE_MENU:   handleModuleCommand(cmd);   break;
-            case LOGGING_MENU:  handleLoggingCommand(cmd);  break;
-            case DEFAULTS_MENU: handleDefaultsCommand(cmd); break;
+            case ROOT_MENU:                handleRootCommand(cmd);                break;
+            case CONFIG_MENU:              handleConfigCommand(cmd);              break;
+            case MODULE_MENU:              handleModuleCommand(cmd);              break;
+            case LOGGING_MENU:             handleLoggingCommand(cmd);             break;
+            case DEFAULTS_MENU:            handleDefaultsCommand(cmd);            break;
+            case ADDITIONAL_HARDWARE_MENU: handleAdditionalHardwareCommand(cmd);  break;
             default: break;
             }
         }
-        // else: multi-char input outside WAITING_FOR_INPUT is not handled
 
         ptrBuffer = 0;
         return;
     }
 
-    // Normal character input - store in buffer
+    // Normal character — store in buffer
     cmdBuffer[ptrBuffer++] = (unsigned char)c;
     if (ptrBuffer > 79) ptrBuffer = 79;
+}
+
+// ======================================================
+// WAITING FOR INPUT — thin dispatcher only, no logic here
+// ======================================================
+
+void Menu::handleWaitingForInput() {
+    switch (pendingEdit) {
+    case EDIT_OVER_VOLTAGE:
+    case EDIT_UNDER_VOLTAGE:
+    case EDIT_OVER_TEMP:
+    case EDIT_UNDER_TEMP:
+    case EDIT_BALANCE_VOLTAGE:
+    case EDIT_BALANCE_HYST:
+        handleConfigWaitingInput();
+        break;
+
+    case EDIT_PRECHARGE_TIMEOUT_MS:
+        handleAdditionalHardwareWaitingInput();
+        break;
+
+        // Add new menus here, e.g.:
+        // case EDIT_FOO_BAR:
+        //     handleFooWaitingInput();
+        //     break;
+
+    default:
+        SERIALCONSOLE.println("Unknown pending edit.");
+        break;
+    }
 }
 
 // ======================================================
@@ -126,6 +154,7 @@ void Menu::printRootMenu() {
     SERIALCONSOLE.println("4. BMS Defaults (factory reset)");
     SERIALCONSOLE.printf("5. Toggle Pack Output to console every 3 seconds. (%s)\n", printPrettyDisplay ? "ON" : "OFF");
     SERIALCONSOLE.printf("6. Toggle Display Mode (summarized or detailed output for option 5) (%s)\n", whichDisplay == 0 ? "Summary" : "Details");
+    SERIALCONSOLE.println("7. Additional Hardware (Precharge circuit, pre-charge delay, current sensor)");
     SERIALCONSOLE.println("0. Exit Menu");
     if (printPrettyDisplay) {
         SERIALCONSOLE.println("\nNote: Pack Summary/Details is PAUSED while menu is open.");
@@ -134,14 +163,15 @@ void Menu::printRootMenu() {
     SERIALCONSOLE.println("\n====================");
 }
 
-void Menu::handleRootCommand(char c) { // Root Menu commands
+void Menu::handleRootCommand(char c) {
     switch (c) {
-    case '1': currentState = CONFIG_MENU;    printConfigMenu();    break;
-    case '2': currentState = MODULE_MENU;    printModuleMenu();    break;
-    case '3': currentState = LOGGING_MENU;   printLoggingMenu();   break;
-    case '4': currentState = DEFAULTS_MENU;  printDefaultsMenu();  break;
+    case '1': currentState = CONFIG_MENU;              printConfigMenu();              break;
+    case '2': currentState = MODULE_MENU;              printModuleMenu();              break;
+    case '3': currentState = LOGGING_MENU;             printLoggingMenu();             break;
+    case '4': currentState = DEFAULTS_MENU;            printDefaultsMenu();            break;
     case '5': printPrettyDisplay = !printPrettyDisplay; printPrettyDisplay ? SERIALCONSOLE.printf("Pack Display is now ENABLED (%s)\n", whichDisplay == 0 ? "Pack Summary" : "Pack Details") : SERIALCONSOLE.println("Pack Display is now DISABLED"); break;
     case '6': whichDisplay = (whichDisplay == 0) ? 1 : 0; SERIALCONSOLE.printf("Display mode is now %s\n", whichDisplay == 0 ? "Pack Summary" : "Pack Details"); break;
+    case '7': currentState = ADDITIONAL_HARDWARE_MENU; printAdditionalHardwareMenu();  break;
     case '0': SERIALCONSOLE.println("Exiting menu. Type m, menu, help, or ? to open the menu again."); isMenuOpen = false; break;
     default:  SERIALCONSOLE.println("Unknown option"); break;
     }
@@ -164,18 +194,18 @@ void Menu::printConfigMenu() {
 
 void Menu::handleConfigCommand(char c) {
     switch (c) {
-    case '1': SERIALCONSOLE.printf("Current: %.3f  Enter new High Voltage Limit (0.0-6.0 V, blank to keep):\n", eepromdata.OverVSetpoint); pendingEdit = EDIT_OVER_VOLTAGE; currentState = WAITING_FOR_INPUT; break;
-    case '2': SERIALCONSOLE.printf("Current: %.3f  Enter new Low Voltage Limit (0.0-6.0 V, blank to keep):\n", eepromdata.UnderVSetpoint); pendingEdit = EDIT_UNDER_VOLTAGE; currentState = WAITING_FOR_INPUT; break;
-    case '3': SERIALCONSOLE.printf("Current: %.1f  Enter new High Temp Limit (0.0-100.0 C, blank to keep):\n", eepromdata.OverTSetpoint); pendingEdit = EDIT_OVER_TEMP; currentState = WAITING_FOR_INPUT; break;
-    case '4': SERIALCONSOLE.printf("Current: %.1f  Enter new Low Temp Limit (-20.0-120.0 C, blank to keep):\n", eepromdata.UnderTSetpoint); pendingEdit = EDIT_UNDER_TEMP; currentState = WAITING_FOR_INPUT; break;
-    case '5': SERIALCONSOLE.printf("Current: %.3f  Enter new Balance Voltage (0.0-6.0 V, blank to keep):\n", eepromdata.balanceVoltage); pendingEdit = EDIT_BALANCE_VOLTAGE; currentState = WAITING_FOR_INPUT; break;
-    case '6': SERIALCONSOLE.printf("Current: %.3f  Enter new Balance Hysteresis (0.0-1.0 V, blank to keep):\n", eepromdata.balanceHyst); pendingEdit = EDIT_BALANCE_HYST; currentState = WAITING_FOR_INPUT; break;
+    case '1': SERIALCONSOLE.printf("Current: %.3f  Enter new High Voltage Limit (0.0-6.0 V, blank to keep):\n", eepromdata.OverVSetpoint);   pendingEdit = EDIT_OVER_VOLTAGE;    currentState = WAITING_FOR_INPUT; break;
+    case '2': SERIALCONSOLE.printf("Current: %.3f  Enter new Low Voltage Limit (0.0-6.0 V, blank to keep):\n", eepromdata.UnderVSetpoint);  pendingEdit = EDIT_UNDER_VOLTAGE;   currentState = WAITING_FOR_INPUT; break;
+    case '3': SERIALCONSOLE.printf("Current: %.1f  Enter new High Temp Limit (0.0-100.0 C, blank to keep):\n", eepromdata.OverTSetpoint);   pendingEdit = EDIT_OVER_TEMP;       currentState = WAITING_FOR_INPUT; break;
+    case '4': SERIALCONSOLE.printf("Current: %.1f  Enter new Low Temp Limit (-20.0-120.0 C, blank to keep):\n", eepromdata.UnderTSetpoint);  pendingEdit = EDIT_UNDER_TEMP;      currentState = WAITING_FOR_INPUT; break;
+    case '5': SERIALCONSOLE.printf("Current: %.3f  Enter new Balance Voltage (0.0-6.0 V, blank to keep):\n", eepromdata.balanceVoltage);  pendingEdit = EDIT_BALANCE_VOLTAGE; currentState = WAITING_FOR_INPUT; break;
+    case '6': SERIALCONSOLE.printf("Current: %.3f  Enter new Balance Hysteresis (0.0-1.0 V, blank to keep):\n", eepromdata.balanceHyst);     pendingEdit = EDIT_BALANCE_HYST;    currentState = WAITING_FOR_INPUT; break;
     case '0': currentState = ROOT_MENU; printRootMenu(); break;
     default:  SERIALCONSOLE.println("Unknown option"); break;
     }
 }
 
-void Menu::handleWaitingForInput() {
+void Menu::handleConfigWaitingInput() {
     if (ptrBuffer == 0) {
         SERIALCONSOLE.println("Value unchanged.");
         returnToConfigMenu();
@@ -192,7 +222,7 @@ void Menu::handleWaitingForInput() {
 
     switch (pendingEdit) {
     case EDIT_OVER_VOLTAGE:
-        if (newVal >= 0.0f && newVal <= 6.0f) { eepromdata.OverVSetpoint = newVal; EEPROMSettings::save(); SERIALCONSOLE.printf("High Voltage Limit set to: %.3f V\n", eepromdata.OverVSetpoint); }
+        if (newVal >= 0.0f && newVal <= 6.0f) { eepromdata.OverVSetpoint = newVal;  EEPROMSettings::save(); SERIALCONSOLE.printf("High Voltage Limit set to: %.3f V\n", eepromdata.OverVSetpoint); }
         else { SERIALCONSOLE.println("Invalid value. Range: 0.0 - 6.0 V"); }
         break;
     case EDIT_UNDER_VOLTAGE:
@@ -200,7 +230,7 @@ void Menu::handleWaitingForInput() {
         else { SERIALCONSOLE.println("Invalid value. Range: 0.0 - 6.0 V"); }
         break;
     case EDIT_OVER_TEMP:
-        if (newVal >= 0.0f && newVal <= 100.0f) { eepromdata.OverTSetpoint = newVal; EEPROMSettings::save(); SERIALCONSOLE.printf("High Temp Limit set to: %.1f C\n", eepromdata.OverTSetpoint); }
+        if (newVal >= 0.0f && newVal <= 100.0f) { eepromdata.OverTSetpoint = newVal;  EEPROMSettings::save(); SERIALCONSOLE.printf("High Temp Limit set to: %.1f C\n", eepromdata.OverTSetpoint); }
         else { SERIALCONSOLE.println("Invalid value. Range: 0.0 - 100.0 C"); }
         break;
     case EDIT_UNDER_TEMP:
@@ -212,18 +242,17 @@ void Menu::handleWaitingForInput() {
         else { SERIALCONSOLE.println("Invalid value. Range: 0.0 - 6.0 V"); }
         break;
     case EDIT_BALANCE_HYST:
-        if (newVal >= 0.0f && newVal <= 1.0f) { eepromdata.balanceHyst = newVal; EEPROMSettings::save(); SERIALCONSOLE.printf("Balance Hysteresis set to: %.3f V\n", eepromdata.balanceHyst); }
+        if (newVal >= 0.0f && newVal <= 1.0f) { eepromdata.balanceHyst = newVal;    EEPROMSettings::save(); SERIALCONSOLE.printf("Balance Hysteresis set to: %.3f V\n", eepromdata.balanceHyst); }
         else { SERIALCONSOLE.println("Invalid value. Range: 0.0 - 1.0 V"); }
         break;
-    default:
-        SERIALCONSOLE.println("Unknown setting.");
-        break;
+    default: break;
     }
 
     returnToConfigMenu();
 }
 
 void Menu::returnToConfigMenu() {
+    pendingEdit = NO_EDIT;
     currentState = CONFIG_MENU;
     printConfigMenu();
 }
@@ -245,12 +274,12 @@ void Menu::printModuleMenu() {
 
 void Menu::handleModuleCommand(char c) {
     switch (c) {
-    case '1': SERIALCONSOLE.println("Sleeping all connected boards"); bms.sleepBoards(); break;
-    case '2': SERIALCONSOLE.println("Waking up all connected boards"); bms.wakeBoards(); break;
-    case '3': bms.findBoards(); break;
-    case '4': SERIALCONSOLE.println("Renumbering all boards"); bms.renumberBoardIDs(); break;
-    case '5': SERIALCONSOLE.println("Clearing all faults"); bms.clearFaults(); break;
-    case '6': bms.balanceCells(); break;
+    case '1': SERIALCONSOLE.println("Sleeping all connected boards");  bms.sleepBoards();      break;
+    case '2': SERIALCONSOLE.println("Waking up all connected boards"); bms.wakeBoards();       break;
+    case '3': bms.findBoards();                                                                 break;
+    case '4': SERIALCONSOLE.println("Renumbering all boards");         bms.renumberBoardIDs(); break;
+    case '5': SERIALCONSOLE.println("Clearing all faults");            bms.clearFaults();      break;
+    case '6': bms.balanceCells();                                                               break;
     case '0': currentState = ROOT_MENU; printRootMenu(); break;
     default:  SERIALCONSOLE.println("Unknown option"); break;
     }
@@ -272,11 +301,11 @@ void Menu::printLoggingMenu() {
 
 void Menu::handleLoggingCommand(char c) {
     switch (c) {
-    case '1': Logger::setLoglevel(Logger::Debug); eepromdata.logLevel = 0; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Debug"); break;
-    case '2': Logger::setLoglevel(Logger::Info);  eepromdata.logLevel = 1; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Info"); break;
+    case '1': Logger::setLoglevel(Logger::Debug); eepromdata.logLevel = 0; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Debug");   break;
+    case '2': Logger::setLoglevel(Logger::Info);  eepromdata.logLevel = 1; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Info");    break;
     case '3': Logger::setLoglevel(Logger::Warn);  eepromdata.logLevel = 2; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Warning"); break;
-    case '4': Logger::setLoglevel(Logger::Error); eepromdata.logLevel = 3; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Error"); break;
-    case '5': Logger::setLoglevel(Logger::Off);   eepromdata.logLevel = 4; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Off"); break;
+    case '4': Logger::setLoglevel(Logger::Error); eepromdata.logLevel = 3; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Error");   break;
+    case '5': Logger::setLoglevel(Logger::Off);   eepromdata.logLevel = 4; EEPROMSettings::save(); SERIALCONSOLE.println("Log level set to: Off");     break;
     case '0': currentState = ROOT_MENU; printRootMenu(); break;
     default:  SERIALCONSOLE.println("Unknown option"); break;
     }
@@ -302,4 +331,77 @@ void Menu::handleDefaultsCommand(char c) {
     case '0': currentState = ROOT_MENU; printRootMenu(); break;
     default:  SERIALCONSOLE.println("Unknown option"); break;
     }
+}
+
+// ======================================================
+// ADDITIONAL HARDWARE MENU
+// ======================================================
+
+void Menu::printAdditionalHardwareMenu() {
+    SERIALCONSOLE.println("\n=== Additional Hardware Settings ===");
+    SERIALCONSOLE.printf("1. Pre-charge Enabled          [%s]\n", eepromdata.prechargeEnabled ? "YES" : "NO");
+    SERIALCONSOLE.printf("2. Current Sensor Present      [%s]\n", eepromdata.currentSensorPresent ? "YES" : "NO");
+    SERIALCONSOLE.printf("3. Pre-charge Timeout          [%d ms]\n", eepromdata.prechargeTimeoutMs);
+    SERIALCONSOLE.println("0. Back to Main Menu");
+}
+
+void Menu::handleAdditionalHardwareCommand(char c) {
+    switch (c) {
+    case '1':
+        eepromdata.prechargeEnabled = !eepromdata.prechargeEnabled;
+        EEPROMSettings::save();
+        SERIALCONSOLE.printf("Pre-charge Enabled set to: %s\n", eepromdata.prechargeEnabled ? "YES" : "NO");
+        printAdditionalHardwareMenu();
+        break;
+    case '2':
+        eepromdata.currentSensorPresent = !eepromdata.currentSensorPresent;
+        EEPROMSettings::save();
+        SERIALCONSOLE.printf("Current Sensor Present set to: %s\n", eepromdata.currentSensorPresent ? "YES" : "NO");
+        printAdditionalHardwareMenu();
+        break;
+    case '3':
+        SERIALCONSOLE.printf("Current: %d  Enter new Pre-charge Timeout (1000-15000 ms, blank to keep):\n", eepromdata.prechargeTimeoutMs);
+        pendingEdit = EDIT_PRECHARGE_TIMEOUT_MS;
+        currentState = WAITING_FOR_INPUT;
+        break;
+    case '0':
+        currentState = ROOT_MENU;
+        printRootMenu();
+        break;
+    default:
+        SERIALCONSOLE.println("Unknown option");
+        break;
+    }
+}
+
+void Menu::handleAdditionalHardwareWaitingInput() {
+    if (ptrBuffer == 0) {
+        SERIALCONSOLE.println("Value unchanged.");
+        returnToAdditionalHardwareMenu();
+        return;
+    }
+
+    switch (pendingEdit) {
+    case EDIT_PRECHARGE_TIMEOUT_MS: {
+        uint32_t newVal = strtoul((char*)cmdBuffer, NULL, 10);
+        if (newVal >= 1000 && newVal <= 15000) {
+            eepromdata.prechargeTimeoutMs = newVal;
+            EEPROMSettings::save();
+            SERIALCONSOLE.printf("Pre-charge Timeout set to: %d ms\n", eepromdata.prechargeTimeoutMs);
+        }
+        else {
+            SERIALCONSOLE.println("Invalid value. Range: 1000 - 15000 ms");
+        }
+        break;
+    }
+    default: break;
+    }
+
+    returnToAdditionalHardwareMenu();
+}
+
+void Menu::returnToAdditionalHardwareMenu() {
+    pendingEdit = NO_EDIT;
+    currentState = ADDITIONAL_HARDWARE_MENU;
+    printAdditionalHardwareMenu();
 }
