@@ -51,4 +51,5 @@ extern HardwareSerial Serial2;
 inline void initPins() {
     digitalWrite(PRECHARGE_RELAY_PIN, LOW);  pinMode(PRECHARGE_RELAY_PIN, OUTPUT);
     digitalWrite(CONTACTOR_RELAY_PIN, LOW);  pinMode(CONTACTOR_RELAY_PIN, OUTPUT);
+    analogSetPinAttenuation(SOC_CURRENT_SENSOR_PIN, ADC_11db);
 }
