@@ -25,8 +25,7 @@ public:
     ContactorState getState() const;
 
 
-    // Dummy hook -  replace this later with real SOC handler
-    float getPackCurrentAmps() const;
+
 
 private:
     ContactorState currentState = OPEN;

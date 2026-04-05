@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <Arduino.h>
 #include "EEPROMSettings.h"
-
+#include "BMSModuleManager.h"
 
 
 // ─── Coulomb counter auto-reset thresholds ───────────────────────────────────
@@ -65,19 +65,19 @@ public:
     // cellsInSeries  : number of series cells (to get per-cell voltage)
     // packCapacityAh : total pack Ah
 
-    void begin(float cellVoltage,
-        float cellTempC,
+    void begin(
         int   cellsInSeries,
-        float packCapacityAh,)
+        float packCapacityAh)
 
 
     // Call every SOC_UPDATE_INTERVAL_MS from main scheduler - never blocks
-    void update(float cellVoltage, float cellTempC);
+    void update();
 
     // Pack current in amps (+ charge, - discharge)
     // Returns 0.0 if currentSensorPresent == false
     // Used by ContactorController for precharge detection
     float getPackCurrentAmps() const;
+ 
 
     // SOC as 0-100 byte for BatterySummary.soc
     uint8_t getSOCByte() const;

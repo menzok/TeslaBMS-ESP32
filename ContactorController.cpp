@@ -5,6 +5,7 @@
 #include "ContactorController.h"
 #include "config.h"          
 #include "EEPROMSettings.h"  
+#include "SOCCalculator.h"
 
 void ContactorController::init() {
     currentState = OPEN;
@@ -44,7 +45,7 @@ void ContactorController::update() {
             prechargeDone = true;
         }
         else if (eepromdata.currentSensorPresent) {
-            float current = getPackCurrentAmps();
+            float current = SOCCalculator::getPackCurrentAmps();
             if (current < 0.5f) {
                 prechargeDone = true;
             }
@@ -88,6 +89,3 @@ ContactorState ContactorController::getState() const {
     return currentState;
 }
 
-float ContactorController::getPackCurrentAmps() const {
-    return 0.0f;        // placeholder - replace later with real SOC handler
-}

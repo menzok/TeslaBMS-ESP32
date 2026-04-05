@@ -457,7 +457,7 @@ BatterySummary BMSModuleManager::getBatterySummary()
 
     s.voltage = getPackVoltage();
     s.current = 0.0f;
-    s.soc = 50;                                      // hard-coded value so can use the same struct
+    s.soc = (uint8_t)eepromdata.socPercent;                                      // hard-coded value so can use the same struct
 
     int avgTempC = (int)getAvgTemperature();
     s.avgTemp = (int8_t)constrain(avgTempC + 40, 0, 255);
@@ -471,29 +471,6 @@ BatterySummary BMSModuleManager::getBatterySummary()
     return s;
 }
 
-BatterySummary BMSModuleManager::getBatterySummaryNoSOC()
-{
-    BatterySummary s;
-
-    s.voltage = getPackVoltage();
-    s.current = 0.0f;
-    s.soc = 50;                                      // hard-coded value so can use the same struct
-
-    // Temperature fields use +40 offset encoding (standard for many BMS/CAN protocols)
-    // Range after encoding: 0 = -40 °C ... 255 = +215 °C
-    // Anything outside this range is clamped to the nearest valid value.
-
-    int avgTempC = (int)getAvgTemperature();
-    s.avgTemp = (int8_t)constrain(avgTempC + 40, 0, 255);
-
-    int minTempC = (int)lowestPackTemp;
-    s.minTemp = (int8_t)constrain(minTempC + 40, 0, 255);
-
-    int maxTempC = (int)highestPackTemp;
-    s.maxTemp = (int8_t)constrain(maxTempC + 40, 0, 255);
-
-    return s;
-}
 
 ModuleSummary BMSModuleManager::getModuleSummary(int module)
 {
@@ -501,7 +478,7 @@ ModuleSummary BMSModuleManager::getModuleSummary(int module)
 
     s.voltage = modules[module].getModuleVoltage();
     s.current = 0.0f;
-    s.soc = 50;
+    s.soc = (uint8_t)eepromdata.socPercent;
 
     int temp = (int)modules[module].getAvgTemp() + 40;
     if (temp < 0) temp = 0;

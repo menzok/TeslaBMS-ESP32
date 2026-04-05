@@ -50,7 +50,6 @@ public:
 
     // --- Accessors ---
     BatterySummary getBatterySummary();
-    BatterySummary getBatterySummaryNoSOC();
     ModuleSummary  getModuleSummary(int module);
     CellDetails    getCellDetails(int module, int cell);
     int            getNumberOfModules() const;

@@ -15,10 +15,7 @@ SOCCalculator::SOCCalculator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-void SOCCalculator::begin(float cellVoltage,
-    float cellTempC,
-    int   cellsInSeries,
-    float packCapacityAh)
+void SOCCalculator::begin(int cellsInSeries, float packCapacityAh)
 {
     _cellsInSeries = cellsInSeries;
     _packCapacityAh = packCapacityAh;
@@ -27,14 +24,18 @@ void SOCCalculator::begin(float cellVoltage,
     _lastUpdateMs = millis();
     _initialised = true;
 
+    // ── Poll live battery data (no more parameters) ───────────────────────
+    BatterySummary summary = bms.getBatterySummary();
+    float cellVoltage = summary.voltage / (float)_cellsInSeries;
+    float cellTempC = (float)summary.avgTemp - 40.0f;   // decode +40 offset
+
     // Cold start - best guess from OCV lookup (eepromdata already loaded)
     if (eepromdata.socPercent < 0.0f || eepromdata.socPercent > 100.0f) {
         eepromdata.socPercent = _ocvToSOC(cellVoltage, cellTempC);
     }
 
     if (eepromdata.currentSensorPresent) {
-        // ── Blocking zero-cal ─────────────────────────────────────────────
-        // (unchanged — your existing zero-cal code stays exactly the same)
+        // ── Blocking zero-cal (unchanged) ─────────────────────────────────
         analogSetPinAttenuation(SOC_CURRENT_SENSOR_PIN, ADC_11db);
 
         float vSum = 0.0f;
@@ -49,10 +50,10 @@ void SOCCalculator::begin(float cellVoltage,
         _filteredCurrentA = 0.0f;
         _lastCurrentA = 0.0f;
     }
-}
+}}
 
 // ───────────────────────────────────────────────────────────────────────���─────
-void SOCCalculator::update(float cellVoltage, float cellTempC)
+void SOCCalculator::update()
 {
     if (!_initialised) return;
 
@@ -65,6 +66,9 @@ void SOCCalculator::update(float cellVoltage, float cellTempC)
         return;
     }
     _lastUpdateMs = now;
+    BatterySummary summary = bms.getBatterySummary();
+    float cellVoltage = summary.voltage / (float)_cellsInSeries;
+    float cellTempC = (float)summary.avgTemp - 40.0f;   // decode +40 offset
 
     if (eepromdata.currentSensorPresent) {
 
