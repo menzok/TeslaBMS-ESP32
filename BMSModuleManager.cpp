@@ -504,7 +504,6 @@ CellDetails BMSModuleManager::getCellDetails(int module, int cell)
     c.lowestCellVolt = modules[module].getLowestCellVolt(cell);
 
     int temp = modules[module].getHighTemp() + 40;
-    if (temp < 0) temp = 0;
     c.highTemp = (int8_t)temp;
 
     c.faultBits = 0;
