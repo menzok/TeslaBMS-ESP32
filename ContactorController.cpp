@@ -7,6 +7,7 @@
 #include "EEPROMSettings.h"  
 #include "SOCCalculator.h"
 
+
 void ContactorController::init() {
     currentState = OPEN;
 }

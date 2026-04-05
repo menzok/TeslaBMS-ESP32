@@ -30,6 +30,7 @@ void EEPROMSettings::loadDefaults()
     eepromdata.currentSensorRatedAmps = DEFAULT_CURRENT_SENSOR_RATED_AMPS;
     eepromdata.socPercent = DEFAULT_SOC_PERCENT;
     eepromdata.coulombCountAh = DEFAULT_COULOMB_COUNT_AH;
+    eepromdata.parallelStrings = DEFAULT_PARALLEL_STRINGS;
 
     Logger::console("Factory defaults loaded");
     save();

@@ -23,7 +23,7 @@ constexpr float DEFAULT_CURRENT_SENSOR_VRANGE = 0.625f;   // For a current senso
 constexpr int   DEFAULT_CURRENT_SENSOR_RATED_AMPS = 500;   //Current sensor AMP rating QN-C15S default
 constexpr float DEFAULT_SOC_PERCENT = 50.0f; 
 constexpr float DEFAULT_COULOMB_COUNT_AH = 0.0f;
-
+constexpr uint8_t DEFAULT_PARALLEL_STRINGS = 2;
 
 
 // ====================== EEPROM Settings Struct ======================
@@ -49,6 +49,9 @@ typedef struct {
     // State of Charge persistent state 
     float   socPercent;               // current SOC 0.0-100.0
     float   coulombCountAh;           // net Ah since last reset (+/-)
+	//Battery Configuration
+    uint8_t parallelStrings;      // number of parallel strings (e.g. 1, 2, 3...)
+
 } EEPROMData;
 
 extern EEPROMData eepromdata;

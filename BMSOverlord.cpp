@@ -5,15 +5,21 @@ void BMSOverlord::init() {
     Serial.println("BMSOverlord: Initializing...");
 
     contactor.init();
-    // TODO: Update SOCCalculator::begin() 
-    socCalculator.begin(96, 100.0f);   // placeholder - replace later
-
+    SERIALCONSOLE.println("Scanning for connected BMS boards..."); //Scan for modules and print results
+    bms.findBoards();
+    if (bms.getNumberOfModules() == 0) {
+        SERIALCONSOLE.println("No modules detected. Setup required.");
+    }
+    else {
+        SERIALCONSOLE.printf("Found %d connected BMS modules\n", bms.getNumberOfModules());
+    }
+    socCalculator.begin();   
 
     // Enable ESP32 task watchdog (15 s for init)
     esp_task_wdt_init(15, true);
     esp_task_wdt_add(NULL);
 
-    Serial.println("BMSOverlord: Init complete - watchdog enabled (15 s)...Go Play");
+    Serial.println("BMSOverlord: Init complete - watchdog enabled (15 s)");
 }
 
 
@@ -25,10 +31,11 @@ void BMSOverlord::update() {
     if (!watchdogTightened && ++successfulUpdates >= 5) {
         esp_task_wdt_reconfigure(1000);
         watchdogTightened = true;
-        Serial.println("BMSOverlord: Watchdog tightened to 1 second....GET OVER HERE");
+        Serial.println("BMSOverlord: Watchdog leash tightened to 1 second....GET OVER HERE");
     }
 
     bms.getAllVoltTemp();
+    bms.balanceCells();
     contactor.update();
     socCalculator.update();
     runSafetyChecks();

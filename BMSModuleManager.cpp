@@ -1,4 +1,4 @@
-#include "config.h"
+﻿#include "config.h"
 #include "BMSModuleManager.h"
 #include "BMSUtil.h"
 #include "Logger.h"
@@ -222,10 +222,11 @@ void BMSModuleManager::wakeBoards()
 
 void BMSModuleManager::getAllVoltTemp()
 {
-    packVolt = 0.0f;
+    packVolt = 0.0f;   // ← reset before we start adding
+
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
-        if (modules[x].isExisting()) 
+        if (modules[x].isExisting())
         {
             Logger::debug("");
             Logger::debug("Module %i exists. Reading voltage and temperature values", x);
@@ -233,16 +234,19 @@ void BMSModuleManager::getAllVoltTemp()
             Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
             Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", modules[x].getLowCellV(), modules[x].getHighCellV());
             Logger::debug("Temp1: %f       Temp2: %f", modules[x].getTemperature(0), modules[x].getTemperature(1));
-            packVolt += modules[x].getModuleVoltage();
+
+            packVolt += modules[x].getModuleVoltage();   
+
             if (modules[x].getLowTemp() < lowestPackTemp) lowestPackTemp = modules[x].getLowTemp();
-            if (modules[x].getHighTemp() > highestPackTemp) highestPackTemp = modules[x].getHighTemp();            
+            if (modules[x].getHighTemp() > highestPackTemp) highestPackTemp = modules[x].getHighTemp();
         }
     }
 
-    if (packVolt > highestPackVolt) highestPackVolt = packVolt;
-    if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
-   
+  
+    packVolt /= (float)eepromdata.parallelStrings;
 
+    if (packVolt > highestPackVolt) highestPackVolt = packVolt;
+    if (packVolt < lowestPackVolt)  lowestPackVolt = packVolt;
 }
 
 float BMSModuleManager::getPackVoltage()

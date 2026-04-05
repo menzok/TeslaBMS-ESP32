@@ -65,9 +65,7 @@ public:
     // cellsInSeries  : number of series cells (to get per-cell voltage)
     // packCapacityAh : total pack Ah
 
-    void begin(
-        int   cellsInSeries,
-        float packCapacityAh);
+    void begin();
 
 
     // Call every SOC_UPDATE_INTERVAL_MS from main scheduler - never blocks
