@@ -9,22 +9,43 @@
 // ====================== Default Settings ======================
 // These defaults prioritize safety, longevity, and real-world solar/off-grid usage with Tesla modules
 
-constexpr float DEFAULT_OVERVOLTAGE = 4.25f;   // 50mV safety headroom above the cell's absolute maximum of 4.20V
-constexpr float DEFAULT_UNDERVOLTAGE = 2.90f;   // Conservative lower limit for daily cycling; protects long-term battery health
-constexpr float DEFAULT_OVERTEMP = 60.0f;   // Maximum safe temperature for Tesla modules in enclosures/solar sheds
-constexpr float DEFAULT_UNDERTEMP = -10.0f;  // Standard safe lower limit for discharge on 18650/2170 cells
-constexpr float DEFAULT_BALANCE_VOLTAGE = 3.95f;   // Balancing starts near full charge so passive bleed resistors can work effectively
-constexpr float DEFAULT_BALANCE_HYST = 0.025f;  // 25mV hysteresis prevents rapid chattering and unnecessary heat
-constexpr bool   DEFAULT_PRECHARGE_ENABLED = true; // Pre-charge is generally recommended to protect contactors and reduce arcing, especially in high-voltage setups
-constexpr uint32_t DEFAULT_PRECHARGE_TIMEOUT_MS = 8000;     // 8 seconds max for pre-charge
-constexpr bool DEFAULT_CURRENT_SENSOR_PRESENT = false; // Hall effect / current detector installed?
-constexpr float DEFAULT_CURRENT_SENSOR_VBIAS = 2.5f;     // For a current sensor like the QN-C15S
-constexpr float DEFAULT_CURRENT_SENSOR_VRANGE = 0.625f;   // For a current sensor like the QN-C15S with ± rated current range around the bias point
-constexpr int   DEFAULT_CURRENT_SENSOR_RATED_AMPS = 500;   //Current sensor AMP rating QN-C15S default
-constexpr float DEFAULT_SOC_PERCENT = 50.0f; 
-constexpr float DEFAULT_COULOMB_COUNT_AH = 0.0f;
-constexpr uint8_t DEFAULT_PARALLEL_STRINGS = 2;
+inline constexpr float DEFAULT_OVERVOLTAGE = 4.25f;   // 50mV safety headroom above the cell's absolute maximum of 4.20V
+inline constexpr float DEFAULT_UNDERVOLTAGE = 2.90f;   // Conservative lower limit for daily cycling; protects long-term battery health
+inline constexpr float DEFAULT_OVERTEMP = 60.0f;   // Maximum safe temperature for Tesla modules in enclosures/solar sheds
+inline constexpr float DEFAULT_UNDERTEMP = -10.0f;  // Standard safe lower limit for discharge on 18650/2170 cells
+inline constexpr float DEFAULT_BALANCE_VOLTAGE = 3.95f;   // Balancing starts near full charge so passive bleed resistors can work effectively
+inline constexpr float DEFAULT_BALANCE_HYST = 0.025f;  // 25mV hysteresis prevents rapid chattering and unnecessary heat
+inline constexpr bool   DEFAULT_PRECHARGE_ENABLED = true; // Pre-charge is generally recommended to protect contactors and reduce arcing, especially in high-voltage setups
+inline constexpr uint32_t DEFAULT_PRECHARGE_TIMEOUT_MS = 8000;     // 8 seconds max for pre-charge
+inline constexpr bool DEFAULT_CURRENT_SENSOR_PRESENT = false; // Hall effect / current detector installed?
+inline constexpr float DEFAULT_CURRENT_SENSOR_VBIAS = 2.5f;     // For a current sensor like the QN-C15S
+inline constexpr float DEFAULT_CURRENT_SENSOR_VRANGE = 0.625f;   // For a current sensor like the QN-C15S with ± rated current range around the bias point
+inline constexpr int   DEFAULT_CURRENT_SENSOR_RATED_AMPS = 500;   //Current sensor AMP rating QN-C15S default
+inline constexpr float DEFAULT_SOC_PERCENT = 50.0f;
+inline constexpr float DEFAULT_COULOMB_COUNT_AH = 0.0f;
+inline constexpr uint8_t DEFAULT_PARALLEL_STRINGS = 2;
+inline constexpr float DEFAULT_OVERCURRENT_THRESHOLD_A = 350.0f;
+inline constexpr uint32_t DEFAULT_STORAGE_WAKE_INTERVAL_MS = 24 * 60 * 60 * 1000UL;
+inline constexpr uint32_t DEFAULT_STORAGE_BALANCE_DURATION_MS = 120000UL;
+inline constexpr uint8_t DEFAULT_CELL_FAULT_DEBOUNCE = 3;
 
+// ====================== Fault log array (used to display last 5 overlord faults ======================
+struct FaultEntry {
+    enum class Type : uint8_t {
+        None,
+        OverVoltage,
+        UnderVoltage,
+        OverTemperature,
+        UnderTemperature,
+        OverCurrent
+    };
+    Type type = Type::None;
+    uint8_t module = 0;
+    uint8_t cell = 0;
+    float value = 0.0f;
+    uint32_t timestamp = 0;
+    uint32_t clearedTimestamp = 0;
+};
 
 // ====================== EEPROM Settings Struct ======================
 typedef struct {
@@ -51,7 +72,12 @@ typedef struct {
     float   coulombCountAh;           // net Ah since last reset (+/-)
 	//Battery Configuration
     uint8_t parallelStrings;      // number of parallel strings (e.g. 1, 2, 3...)
-
+	//overlord settings
+    FaultEntry faultLog[5];
+    float OVERCURRENT_THRESHOLD_A; //  Short protection Use fuses DUMMY but just incase.
+	uint32_t STORAGE_WAKE_INTERVAL_MS;  // How long to wait between storage mode wake cycles to balance and refresh the cells (e.g. 24 hours)
+	uint32_t STORAGE_BALANCE_DURATION_MS;    // How long to keep the BMS awake and balancing during each storage mode wake cycle (e.g. 2 minutes)
+    uint8_t CELL_FAULT_DEBOUNCE;  // number of consecutive fault readings before faulting (to prevent noise/chatter)
 } EEPROMData;
 
 extern EEPROMData eepromdata;

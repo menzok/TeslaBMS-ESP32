@@ -3,6 +3,7 @@
 #include "Logger.h"
 
 void BMSOverlord::init() {
+    faultLog = eepromdata.faultLog;
     Serial.println("BMSOverlord: Initializing...");
     // Enable ESP32 task watchdog (15 s for init)
     esp_task_wdt_config_t twdt_config = {
@@ -62,7 +63,7 @@ void BMSOverlord::runSafetyChecks() {
     bool anyFault = false;
 
     // Overcurrent - immediate, no debounce
-    if (currentA > OVERCURRENT_THRESHOLD_A) {
+    if (currentA > eepromdata.OVERCURRENT_THRESHOLD_A) {
         if (currentState != BMSState::Fault) {          // rising edge
             logFault(FaultEntry::Type::OverCurrent, 0, 0, currentA);
             Serial.printf("OVERCURRENT FAULT! %.1f A\n", currentA);
@@ -87,7 +88,7 @@ void BMSOverlord::runSafetyChecks() {
 
             // Per-cell debounce + log ONLY ONCE when it first hits the threshold
             if (overVoltage) {
-                if (++ovDebounce[m][c] == CELL_FAULT_DEBOUNCE) {   // note: == not >=
+                if (++ovDebounce[m][c] == eepromdata.CELL_FAULT_DEBOUNCE) {   // note: == not >=
                     logFault(FaultEntry::Type::OverVoltage, m, c, voltage);
                     anyFault = true;
                 }
@@ -97,7 +98,7 @@ void BMSOverlord::runSafetyChecks() {
             }
 
             if (underVoltage) {
-                if (++uvDebounce[m][c] == CELL_FAULT_DEBOUNCE) {
+                if (++uvDebounce[m][c] == eepromdata.CELL_FAULT_DEBOUNCE) {
                     logFault(FaultEntry::Type::UnderVoltage, m, c, voltage);
                     anyFault = true;
                 }
@@ -107,7 +108,7 @@ void BMSOverlord::runSafetyChecks() {
             }
 
             if (overTemp) {
-                if (++otDebounce[m][c] == CELL_FAULT_DEBOUNCE) {
+                if (++otDebounce[m][c] == eepromdata.CELL_FAULT_DEBOUNCE) {
                     logFault(FaultEntry::Type::OverTemperature, m, c, tempC);
                     anyFault = true;
                 }
@@ -117,7 +118,7 @@ void BMSOverlord::runSafetyChecks() {
             }
 
             if (underTemp) {
-                if (++utDebounce[m][c] == CELL_FAULT_DEBOUNCE) {
+                if (++utDebounce[m][c] == eepromdata.CELL_FAULT_DEBOUNCE) {
                     logFault(FaultEntry::Type::UnderTemperature, m, c, tempC);
                     anyFault = true;
                 }
@@ -165,17 +166,17 @@ void BMSOverlord::handleContactorLogic() {
 void BMSOverlord::handleStorageMode() {
     if (!storageModeActive) return;
     uint32_t now = millis();
-    if (now - lastStorageWakeMs >= STORAGE_WAKE_INTERVAL_MS) {
+    if (now - lastStorageWakeMs >= eepromdata.STORAGE_WAKE_INTERVAL_MS) {
         lastStorageWakeMs = now;
-        storageBalanceEndMs = now + STORAGE_BALANCE_DURATION_MS;
+        storageBalanceEndMs = now + eepromdata.STORAGE_BALANCE_DURATION_MS;
         bms.wakeBoards();
         balancingActive = true;
-        Serial.println("BMSOverlord: Storage wake - balancing started");
+       // Serial.println("BMSOverlord: Storage wake - balancing started");
     }
     if (balancingActive && now >= storageBalanceEndMs) {
         bms.sleepBoards();
         balancingActive = false;
-        Serial.println("BMSOverlord: Storage cycle complete - boards slept");
+      //  Serial.println("BMSOverlord: Storage cycle complete - boards slept");
     }
 }
 
@@ -200,13 +201,11 @@ void BMSOverlord::logFault(FaultEntry::Type type, uint8_t module, uint8_t cell, 
 
 
 void BMSOverlord::requestShutdown() {
-    shutdownRequested = true;
     storageModeActive = true;
     Logger::warn("BMSOverlord: Shutdown requested - entering Storage mode");
 }
 
 void BMSOverlord::requestStartup() {
-    shutdownRequested = false;
     storageModeActive = false;
     Logger::warn("BMSOverlord: Startup requested - returning to Normal mode");
 }

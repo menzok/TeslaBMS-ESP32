@@ -21,23 +21,6 @@ public:
         Shutdown
     };
 
-    struct FaultEntry {
-        enum class Type : uint8_t {
-            None,
-            OverVoltage,
-            UnderVoltage,
-            OverTemperature,
-            UnderTemperature,
-            OverCurrent
-        };
-        Type type = Type::None;
-        uint8_t module = 0;
-        uint8_t cell = 0;
-        float value = 0.0f;
-        uint32_t timestamp = 0;          // when fault occurred
-        uint32_t clearedTimestamp = 0;   // 0 = still active
-    };
-
     void init();
     void update();
 
@@ -51,20 +34,12 @@ public:
     
 
 private:
-    // Configurable constants (easy to promote to eepromdata later)
-    static constexpr float OVERCURRENT_THRESHOLD_A = 350.0f;
-    static constexpr uint32_t STORAGE_WAKE_INTERVAL_MS = 24 * 60 * 60 * 1000UL;  // 24 hours
-    static constexpr uint32_t STORAGE_BALANCE_DURATION_MS = 120000UL;           // 2 minutes
-
-	static constexpr uint8_t CELL_FAULT_DEBOUNCE = 3;  // number of consecutive fault readings before faulting (to prevent noise/chatter)
-
-    // === Variables intended to be moved to EEPROM later ===
-    FaultEntry faultLog[5]; 
+ 
+    FaultEntry* faultLog;  //EEPROM array for storing faults.
     
 
     // Internal state
     BMSState currentState = BMSState::Normal;
-    bool shutdownRequested = false;
     bool storageModeActive = false;
 
     // Timers

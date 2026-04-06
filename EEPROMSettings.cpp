@@ -31,6 +31,10 @@ void EEPROMSettings::loadDefaults()
     eepromdata.socPercent = DEFAULT_SOC_PERCENT;
     eepromdata.coulombCountAh = DEFAULT_COULOMB_COUNT_AH;
     eepromdata.parallelStrings = DEFAULT_PARALLEL_STRINGS;
+    eepromdata.OVERCURRENT_THRESHOLD_A = DEFAULT_OVERCURRENT_THRESHOLD_A;
+    eepromdata.STORAGE_WAKE_INTERVAL_MS = DEFAULT_STORAGE_WAKE_INTERVAL_MS;
+    eepromdata.STORAGE_BALANCE_DURATION_MS = DEFAULT_STORAGE_BALANCE_DURATION_MS;
+    eepromdata.CELL_FAULT_DEBOUNCE = DEFAULT_CELL_FAULT_DEBOUNCE;
 
     Logger::console("Factory defaults loaded");
     save();
@@ -40,22 +44,23 @@ void EEPROMSettings::load()
 {
     EEPROM.get(0, eepromdata);
 
-    if (eepromdata.version != EEPROM_VERSION)
+    if (eepromdata.version != EEPROM_VERSION ||
+        eepromdata.checksum != (eepromdata.version + 42)) 
     {
         Logger::console("EEPROM invalid or empty - Resetting to factory defaults");
+        memset(&eepromdata, 0, sizeof(EEPROMData));   // clears faultLog on first boot only
         loadDefaults();
     }
     else
     {
         Logger::console("Settings loaded from EEPROM successfully");
     }
-    Logger::setLoglevel((Logger::LogLevel)eepromdata.logLevel); //set log level.... derp.
+    Logger::setLoglevel((Logger::LogLevel)eepromdata.logLevel);
 }
 
 void EEPROMSettings::save()
 {
     eepromdata.checksum = eepromdata.version + 42;
-
     EEPROM.put(0, eepromdata);
     EEPROM.commit();
 
