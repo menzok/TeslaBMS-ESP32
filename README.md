@@ -27,7 +27,7 @@ The firmware is **stable and fully functional** for solar/off-grid, DIY EV packs
 
 Further detailed documentation is available in the repository:
 - [`systems.md`](systems.md) — Complete system architecture and component documentation
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — High-level design decisions and data flow
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — High-level design decisions and data flow (VIEW RAW, or looks screwed up)
 
 ---
 
