@@ -46,7 +46,8 @@ public:
     void clearFaults();
     void sleepBoards();
     void wakeBoards();
-    void getAllVoltTemp();
+    // Returns number of modules that successfully returned data this cycle
+    uint8_t getAllVoltTemp();
 
     // --- Accessors ---
     BatterySummary getBatterySummary();
@@ -69,4 +70,5 @@ private:
     float     highestPackTemp;
     BMSModule modules[MAX_MODULE_ADDR + 1];
     int       numFoundModules;
+
 };

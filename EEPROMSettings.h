@@ -37,7 +37,8 @@ struct FaultEntry {
         UnderVoltage,
         OverTemperature,
         UnderTemperature,
-        OverCurrent
+        OverCurrent,
+        CommsError
     };
     Type type = Type::None;
     uint8_t module = 0;

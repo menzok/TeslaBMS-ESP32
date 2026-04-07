@@ -45,7 +45,7 @@ void BMSOverlord::update() {
         Serial.println("BMSOverlord: Watchdog tightened to 1 second....GET OVER HERE");
 	}
 
-    bms.getAllVoltTemp();
+    lastSuccessfulModules = bms.getAllVoltTemp();
     bms.balanceCells();
     contactor.update();
     socCalculator.update();
@@ -70,7 +70,20 @@ void BMSOverlord::runSafetyChecks() {
         }
         anyFault = true;
     }
+   // Module Comms Saftey check
+    uint8_t expectedModules = bms.getNumberOfModules();
 
+    if (lastSuccessfulModules < expectedModules) {
+        if (++commsDebounce == eepromdata.CELL_FAULT_DEBOUNCE) {
+            logFault(FaultEntry::Type::CommsError, 0, 0, expectedModules - lastSuccessfulModules);
+            Serial.printf("COMMS FAULT: Only %u of %u modules responded!\n",
+                lastSuccessfulModules, expectedModules);
+            anyFault = true;
+        }
+    }
+    else {
+        commsDebounce = 0;   // good cycle → reset debounce
+    }
     for (uint8_t m = 0; m < bms.getNumberOfModules(); m++) {
         for (uint8_t c = 0; c < 6; c++) {
             CellDetails cell = bms.getCellDetails(m, c);

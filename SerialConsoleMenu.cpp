@@ -558,6 +558,7 @@ void Menu::printFaultLogMenu() {
         case FaultEntry::Type::OverTemperature: return "OverTemperature";
         case FaultEntry::Type::UnderTemperature:return "UnderTemperature";
         case FaultEntry::Type::OverCurrent:     return "OverCurrent";
+        case FaultEntry::Type::CommsError:      return "CommsError";
         default:                                return "Unknown";
         }
         };

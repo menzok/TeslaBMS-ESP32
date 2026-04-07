@@ -220,9 +220,10 @@ void BMSModuleManager::wakeBoards()
     BMSUtil::getReply(buff, 8);
 }
 
-void BMSModuleManager::getAllVoltTemp()
+uint8_t BMSModuleManager::getAllVoltTemp()
 {
     packVolt = 0.0f;   // ← reset before we start adding
+    uint8_t successfulReads = 0;
 
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
@@ -230,7 +231,7 @@ void BMSModuleManager::getAllVoltTemp()
         {
             Logger::debug("");
             Logger::debug("Module %i exists. Reading voltage and temperature values", x);
-            modules[x].readModuleValues();
+            successfulReads += modules[x].readModuleValues();
             Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
             Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", modules[x].getLowCellV(), modules[x].getHighCellV());
             Logger::debug("Temp1: %f       Temp2: %f", modules[x].getTemperature(0), modules[x].getTemperature(1));
@@ -247,6 +248,7 @@ void BMSModuleManager::getAllVoltTemp()
 
     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
     if (packVolt < lowestPackVolt)  lowestPackVolt = packVolt;
+    return successfulReads;
 }
 
 float BMSModuleManager::getPackVoltage()

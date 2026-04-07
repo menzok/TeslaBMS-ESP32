@@ -57,10 +57,13 @@ private:
     uint8_t uvDebounce[64][6] = {};
     uint8_t otDebounce[64][6] = {};
     uint8_t utDebounce[64][6] = {};
+	uint8_t lastSuccessfulModules = 0;
+    uint8_t commsDebounce = 0;
 
     void runSafetyChecks();
     void handleContactorLogic();
     void handleStorageMode();
     void logFault(FaultEntry::Type type, uint8_t module, uint8_t cell, float value);
     void clearLastFaultIfResolved();
+    
 };
