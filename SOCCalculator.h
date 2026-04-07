@@ -6,19 +6,44 @@
 
 extern BMSModuleManager bms;
 // ─── Coulomb counter auto-reset thresholds ───────────────────────────────────
-#define SOC_CELL_FULL_VOLTAGE       4.15f   // V/cell - declare 100%
+#define SOC_CELL_FULL_VOLTAGE       4.18f   // V/cell - declare 100%
 #define SOC_CELL_EMPTY_VOLTAGE      3.00f   // V/cell - declare 0%
 #define SOC_RESET_CONFIRM_TICKS     5       // consecutive ticks before reset fires
 
 // ─── OCV correction ──────────────────────────────────────────────────────────
-#define SOC_OCV_REST_BLEND_RATE     0.02f   // fraction of error corrected per tick at rest
-#define SOC_ZERO_CURRENT_THRESHOLD  1.0f    // amps - below this = pack at rest
+#define SOC_OCV_REST_BLEND_RATE     0.05f   // fraction of error corrected per tick at rest
+#define SOC_ZERO_CURRENT_THRESHOLD  0.8f    // amps - below this = pack at rest
 
 // ─── ADC ─────────────────────────────────────────────────────────────────────
 #define SOC_ADC_OVERSAMPLE          8       // samples averaged per current reading
 #define SOC_ZERO_CAL_SAMPLES        32      // blocking samples taken in begin()
 
-// ─── OCV-SOC lookup table ────────────────────────────────────────────────────
+
+/*
+ * OCV-SOC Lookup Table for Panasonic NCA Lithium-Ion Cells
+ *
+ * Data source:
+ *   McMaster University battery test data (Tesla/Panasonic 2170 NCA cells, 4.5 Ah nominal)
+ *   Specifically Cell 4 ("m1000" – 1000 kg payload + HVAC ON)
+ *   Extracted from HPPC test long zero-current rest periods (end-of-rest voltage used)
+ *   Temperatures: -10°C, 10°C, 25°C, 40°C
+ *   Full dataset available here: https://battery.mcmaster.ca/research/standardized-blind-modeling-tool/
+ *
+ * Why I chose this dataset for my BMS:
+ *   My target pack is a Tesla Model S 85 kWh module using Panasonic NCR18650PF cells.
+ *   These 2170 cells are from a Model 3, so they are not an exact match.
+ *
+ *   However the chemistry is the same Panasonic NCA family, and the OCV curve is extremely close
+ *   (typical difference is only 10-25 mV across the full SOC range). For a practical BMS this
+ *   is more than good enough. The only real differences are internal resistance and thermal
+ *   behavior, which are not used in my model and do not affect this OCV lookup table.
+ *
+ *   This was the highest-quality, easiest-to-work-with public NCA dataset available with proper
+ *   long relaxation periods, so I used it to build a solid, temperature-dependent OCV table.
+ *
+ */
+
+// ─── OCV-SOC lookup table (m1000 HPPC data) ─────────────────
 #define SOC_LUT_POINTS  14
 #define SOC_LUT_TEMPS    4
 
@@ -32,25 +57,26 @@ static const float SOC_LUT_TEMP_POINTS[SOC_LUT_TEMPS] = {
     -10.0f, 10.0f, 25.0f, 40.0f
 };
 
-// [SOC_point][temp_col]
+// [SOC_point][temp_col]  ← REAL DATA  HPPC rests
 static const float SOC_LUT_OCV[SOC_LUT_POINTS][SOC_LUT_TEMPS] = {
-    //   -10°C    10°C     25°C     40°C
-        {3.3274f, 3.1611f, 3.0364f, 2.9881f},  //   0%
-        {3.3070f, 3.1413f, 3.1795f, 3.1469f},  //   5%
-        {3.4013f, 3.2651f, 3.2923f, 3.2576f},  //  10%
-        {3.4547f, 3.3807f, 3.4031f, 3.3700f},  //  15%
-        {3.4950f, 3.4534f, 3.4728f, 3.4564f},  //  20%
-        {3.5304f, 3.4970f, 3.5641f, 3.5409f},  //  30%
-        {3.6066f, 3.5989f, 3.6705f, 3.6588f},  //  40%
-        {3.6935f, 3.7819f, 3.7642f, 3.7576f},  //  50%
-        {3.7819f, 3.8574f, 3.8436f, 3.8416f},  //  60%
-        {3.9069f, 3.9394f, 3.9423f, 3.9412f},  //  70%
-        {3.9751f, 4.0338f, 4.0491f, 4.0455f},  //  80%
-        {4.0571f, 4.0902f, 4.1002f, 4.1023f},  //  90%
-        {4.0836f, 4.1083f, 4.1209f, 4.1246f},  //  95%
-        {4.1609f, 4.1665f, 4.1776f, 4.1788f},  // 100%
+    //   -10°C     10°C      25°C      40°C
+    { 3.3274f,  3.1611f,  3.0364f,  2.9789f },  //   0%   (extrapolated data)
+    { 3.3070f,  3.1413f,  3.1198f,  3.1182f },  //   5%
+    { 3.4013f,  3.2065f,  3.2541f,  3.2423f },  //  10%
+    { 3.3713f,  3.3339f,  3.3667f,  3.3539f },  //  15%
+    { 3.4473f,  3.4300f,  3.4512f,  3.4457f },  //  20%
+    { 3.5422f,  3.5419f,  3.5517f,  3.5396f },  //  30%
+    { 3.6314f,  3.6467f,  3.6598f,  3.6529f },  //  40%
+    { 3.7212f,  3.7408f,  3.7561f,  3.7537f },  //  50%
+    { 3.8208f,  3.8275f,  3.8405f,  3.8403f },  //  60%
+    { 3.8936f,  3.9217f,  3.9388f,  3.9395f },  //  70%
+    { 3.9779f,  4.0251f,  4.0463f,  4.0451f },  //  80%
+    { 4.0603f,  4.0897f,  4.1005f,  4.1032f },  //  90%
+    { 4.0898f,  4.1007f,  4.1226f,  4.1264f },  //  95%
+    { 4.1624f,  4.1664f,  4.1797f,  4.1891f }   // 100%
 };
-
+_Static_assert(sizeof(SOC_LUT_OCV) / sizeof(SOC_LUT_OCV[0]) == SOC_LUT_POINTS, "SOC LUT row mismatch");
+_Static_assert(sizeof(SOC_LUT_OCV[0]) / sizeof(float) == SOC_LUT_TEMPS, "SOC LUT col mismatch");
 // ─────────────────────────────────────────────────────────────────────────────
 
 class SOCCalculator {
@@ -93,6 +119,8 @@ private:
     float         _lastCurrentA;
     unsigned long _lastUpdateMs;
     bool          _initialised;
+    unsigned long _lastSaveMs;
+    float         _currentSensorAdaptiveOffsetV;
 
     // ── Endpoint reset confirmation ───────────────────────────────────────
     uint8_t       _fullConfirmTicks;

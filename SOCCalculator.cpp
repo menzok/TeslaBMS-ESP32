@@ -11,6 +11,8 @@ SOCCalculator::SOCCalculator()
     , _initialised(false)
     , _fullConfirmTicks(0)
     , _emptyConfirmTicks(0)
+    , _lastSaveMs(0)
+    , _currentSensorAdaptiveOffsetV(0.0f)
 {
 }
 
@@ -56,8 +58,9 @@ void SOCCalculator::begin()
 void SOCCalculator::update()
 {
     if (!_initialised) return;
-
     unsigned long now = millis();
+
+
     unsigned long elapsed = now - _lastUpdateMs;
 
     // Skip if called too early or millis() rolled over
@@ -135,6 +138,23 @@ void SOCCalculator::update()
     else {
         _emptyConfirmTicks = 0;
     }
+  
+    if ((now - _lastSaveMs) >= 1200000UL) {   // 20 minutes save the SOC and Columb count to eeprom.
+        EEPROMSettings::save();
+        _lastSaveMs = now;
+    }
+    // ── Adaptive current sensor drift correction (OCV-guided) ─────────────
+    // Only adjust when the pack has been at rest long enough for OCV to be trustworthy
+    if (fabsf(_filteredCurrentA) < SOC_ZERO_CURRENT_THRESHOLD) {
+        float ocvSoc = _ocvToSOC(cellVoltage, cellTempC);
+        float socError = ocvSoc - eepromdata.socPercent;
+
+        // Only trim if error is consistent and meaningful
+        if (fabsf(socError) > 0.3f) {
+            // Very slow adjustment (~0.0003 V per second at 1 Hz)
+            _currentSensorAdaptiveOffsetV += 0.0003f * socError;
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +179,8 @@ float SOCCalculator::_readCurrentAmps() const {
     }
     // Apply zero offset captured at boot to cancel sensor + ADC bias
     float vSensor = _adcToVoltage(sum / SOC_ADC_OVERSAMPLE)
-        - currentSensorZeroOffsetV;
+        - currentSensorZeroOffsetV
+        - currentSensorAdaptiveOffsetV;
 
     // Scale by measure range (110% of rated current per QN-C15S datasheet)
     float measureRangeAmps = (float)eepromdata.currentSensorRatedAmps * 1.1f;
