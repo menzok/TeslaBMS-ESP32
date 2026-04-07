@@ -55,7 +55,7 @@ Further detailed documentation is available in the repository:
 1. Wire the modules exactly as shown in the [original wiring diagram](https://cdn.hackaday.io/files/10098432032832/wiring.pdf)
 2. Connect:
    - `Serial2` (GPIO 16 RX / 17 TX) → BMS daisy-chain
-   - GPIO 25 → Pre-charge relay
+   - GPIO 25 → Optional Pre-charge relay
    - GPIO 26 → Main contactor relay
    - GPIO 34 → Optional current sensor (Hall effect)
 3. Open the project in the Arduino IDE (flat folder structure)
