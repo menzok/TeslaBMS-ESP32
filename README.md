@@ -46,7 +46,7 @@ Further detailed documentation is available in the repository:
 
 ### Planned features
 - Victron OS integration layer on core 0.  
-- some small todo's in todo file....
+
 
 ---
 
