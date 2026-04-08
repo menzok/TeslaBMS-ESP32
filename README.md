@@ -62,6 +62,7 @@ Further detailed documentation is available in the repository:
 4. Select your ESP32 board and flash
 5. Open the serial monitor at 115200 baud and type `menu` for the interactive console
 
+*****Ensure you use a IRF520 MOSFET module or similar for the relay control outputs, as the ESP32 GPIOs cannot drive relays directly. *****
 ---
 
 ### Repository Status
