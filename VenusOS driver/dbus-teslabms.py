@@ -4,42 +4,45 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  dbus-teslabms.py  —  Standalone Venus OS battery driver for TeslaBMS-ESP32
 #
-#  Single frame design
-#  ───────────────────
-#  The ESP32 sends one 27-byte frame every ~1000 ms (unsolicited heartbeat).
-#  Every frame carries BOTH live telemetry AND the current EEPROM config
-#  values.  There is no separate config request or second frame type.
-#
-#  If no frame arrives within STALE_TIMEOUT seconds the driver sends
-#  EXT_CMD_SEND_DATA (0x03) to demand an immediate reply.
-#
-#  Frame format (27 bytes total)
+#  Frame format (29 bytes total)
 #  ──────────────────────────────
 #  [0]      0xAA           start byte
-#  [1..24]  payload        24-byte payload (see map below)
-#  [25..26] CRC16/MODBUS   little-endian, computed over payload bytes only
+#  [1..26]  payload        26-byte payload (see map below)
+#  [27..28] CRC16/MODBUS   little-endian, computed over payload bytes only
 #
 #  Payload map (all multi-byte fields big-endian)
 #  ──────────────────────────────────────────────
-#  [0-1]   packV          uint16  × 100   → V   (10 mV resolution)
-#  [2-3]   packI          int16   × 10    → A   (100 mA resolution, + = charge)
-#  [4]     soc            uint8   0-100   %
-#  [5]     temp           int8    °C      (signed)
-#  [6-7]   power          int16   W
-#  [8-9]   avgCell        uint16  × 100   → V   (10 mV resolution)
-#  [10-11] alarmFlags     uint16  bitmask (ALARM_* constants)
-#  [12]    overlordState  uint8   0=Normal 1=Fault 2=StorageMode
-#  [13]    contactorState uint8   raw contactor enum
-#  [14-15] overVoltage    uint16  × 1000  → V   (1 mV resolution)
-#  [16-17] underVoltage   uint16  × 1000  → V   (1 mV resolution)
-#  [18]    overTemp       int8    °C      (signed, whole degrees)
-#  [19]    underTemp      int8    °C      (signed, whole degrees)
-#  [20]    numModules     uint8   total modules detected by BMS
-#  [21]    numStrings     uint8   parallel string count (from EEPROM)
-#  [22]    reserved       0x00
-#  [23]    reserved       0x00
+#  [0-1]   packV               uint16  × 100   → V   (10 mV res)
+#  [2-3]   packI               int16   × 10    → A   (100 mA res, + = charge)
+#  [4]     soc                 uint8   0-100   %
+#  [5]     temp                int8    °C      (signed)
+#  [6-7]   power               int16   W
+#  [8-9]   avgCell             uint16  × 100   → V   (10 mV res)
+#  [10-11] alarmFlags          uint16  bitmask (bits 5-15 reserved/unimplemented)
+#  [12]    overlordState       uint8   0=Normal 1=Fault 2=StorageMode
+#  [13]    contactorState      uint8   raw enum
+#  [14-15] overVoltage         uint16  × 1000  → V   (1 mV res)
+#  [16-17] underVoltage        uint16  × 1000  → V   (1 mV res)
+#  [18]    overTemp            int8    °C      (signed)
+#  [19]    underTemp           int8    °C      (signed)
+#  [20]    numModules          uint8   total modules detected
+#  [21]    numStrings          uint8   parallel string count
+#  [22-23] overCurrentThresh   uint16  × 10    → A   (0.1A res)
+#  [24]    reserved            0x00
+#  [25]    reserved            0x00
 #
-#  Capacity formula:  Ah = (numModules / numStrings) × AH_PER_MODULE
+#  Venus OS user-configurable settings (com.victronenergy.settings)
+#  ────────────────────────────────────────────────────────────────
+#  /Settings/TeslaBMS/MaxChargeCurrent       default = 250A
+#  /Settings/TeslaBMS/MaxDischargeCurrent    default = 250A
+#  /Settings/TeslaBMS/AbsorptionVoltage      default = 4.15V per cell
+#  /Settings/TeslaBMS/FloatVoltage           default = 4.10V per cell
+#  /Settings/TeslaBMS/TailCurrent            default = 10A
+#  /Settings/TeslaBMS/MaxChargeTemp          default = 45°C
+#  /Settings/TeslaBMS/MinChargeTemp          default = 5°C
+#
+#  The overcurrent threshold from ESP32 EEPROM is used as the hard cap
+#  on CCL/DCL — user settings cannot exceed it.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -57,40 +60,43 @@ from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import dbus
 
-# ── velib_python — ships with every Venus OS installation ────────────────────
+# ── velib_python ──────────────────────────────────────────────────────────────
 VELIB_PATH = "/opt/victronenergy/dbus-serialbattery/ext/velib_python"
 sys.path.insert(1, VELIB_PATH)
-from vedbus import VeDbusService   # noqa: E402
+from vedbus import VeDbusService           # noqa: E402
+from settingsdevice import SettingsDevice  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Constants — only things Venus OS owns (not mirrored from ESP32 EEPROM)
-# ─────────────────────────────────────────────────────���───────────────────────
+#  Constants — Venus OS owns these, not the ESP32
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Nominal Ah per series module in a Tesla pack
-AH_PER_MODULE = 232.0
+AH_PER_MODULE = 232.0   # Ah per Tesla module (6S 74P, 232 Ah)
 
-# Float voltage offset below the EEPROM overvoltage threshold.
-# e.g. OV=4.25 V → float target = 4.25 - 0.10 = 4.15 V per cell.
-# Venus OS sends this as CVL to the charger so it does not continuously
-# push all the way to the absolute cell maximum.
-CELL_FLOAT_OFFSET = 0.10   # V
+# Hard cap — user settings are clamped to this regardless of what they enter.
+# The ESP32 EEPROM overcurrent threshold is also enforced as an upper bound.
+CURRENT_HARD_CAP = 500.0   # A
 
-# Maximum continuous charge / discharge current limits (A)
-# Adjust to match your pack's BMS/fuse rating.
-MAX_CHARGE_CURRENT    = 200.0
-MAX_DISCHARGE_CURRENT = 200.0
+# Settings defaults — healthy starting points for a Tesla Model 3 pack
+DEFAULT_MAX_CHARGE_CURRENT    = 250.0   # A
+DEFAULT_MAX_DISCHARGE_CURRENT = 250.0   # A
+DEFAULT_ABSORPTION_VOLTAGE    = 4.15    # V per cell
+DEFAULT_FLOAT_VOLTAGE         = 4.10    # V per cell
+DEFAULT_TAIL_CURRENT          = 10.0    # A  (end-of-charge detection)
+DEFAULT_MAX_CHARGE_TEMP       = 45.0    # °C (charge inhibit above)
+DEFAULT_MIN_CHARGE_TEMP       = 5.0     # °C (charge inhibit below)
 
 # Timing
-STALE_TIMEOUT       = 2.5    # s — demand a frame if nothing received
-OFFLINE_TIMEOUT     = 15.0   # s — declare BMS offline
+STALE_TIMEOUT       = 2.5
+OFFLINE_TIMEOUT     = 15.0
 BAUD_RATE           = 115200
-PUBLISH_INTERVAL_MS = 1000   # ms — GLib publish timer
+PUBLISH_INTERVAL_MS = 1000
 
-# D-Bus identity
 DBUS_SERVICE_NAME = "com.victronenergy.battery.teslabms"
+SETTINGS_SERVICE  = "com.victronenergy.settings"
+SETTINGS_BASE     = "/Settings/TeslaBMS"
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Protocol constants  (must match ExternalCommsLayer.h)
+#  Protocol constants
 # ─────────────────────────────────────────────────────────────────────────────
 
 EXT_CMD_SHUTDOWN  = 0x01
@@ -98,14 +104,15 @@ EXT_CMD_STARTUP   = 0x02
 EXT_CMD_SEND_DATA = 0x03
 
 FRAME_START_BYTE  = 0xAA
-PAYLOAD_LEN       = 24
-FRAME_LEN         = 1 + PAYLOAD_LEN + 2   # = 27
+PAYLOAD_LEN       = 26
+FRAME_LEN         = 1 + PAYLOAD_LEN + 2   # = 29
 
 ALARM_OVER_VOLTAGE  = (1 << 0)
 ALARM_UNDER_VOLTAGE = (1 << 1)
 ALARM_OVER_TEMP     = (1 << 2)
 ALARM_UNDER_TEMP    = (1 << 3)
 ALARM_OVER_CURRENT  = (1 << 4)
+# bits 5-15: reserved, not yet implemented in ESP32 firmware
 
 ALARM_OK      = 0
 ALARM_WARNING = 1
@@ -127,7 +134,7 @@ logging.basicConfig(
 log = logging.getLogger("teslabms")
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CRC-16 / MODBUS  (identical to ExternalCommsLayer::calculateCRC16)
+#  CRC-16 / MODBUS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def crc16_modbus(data: bytes) -> int:
@@ -139,47 +146,208 @@ def crc16_modbus(data: bytes) -> int:
     return crc
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  TeslaBMSSerial  —  UART handler + decoded state (background thread)
+#  VenusSettings — user-configurable charge parameters
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VenusSettings:
+    """
+    Persists user-configurable charge/discharge settings in
+    com.victronenergy.settings under /Settings/TeslaBMS/.
+
+    These settings survive reboots and firmware updates.
+    They are the user's installation-specific limits and charge targets.
+
+    The ESP32 EEPROM overcurrent threshold is enforced as a hard upper
+    bound on MaxChargeCurrent and MaxDischargeCurrent — the user cannot
+    set values above what the contactor is rated for.
+    """
+
+    _BASE = SETTINGS_BASE
+
+    def __init__(self, bus):
+        self._bus = bus
+        self._sd  = None
+        self._cache = {
+            "MaxChargeCurrent":     DEFAULT_MAX_CHARGE_CURRENT,
+            "MaxDischargeCurrent":  DEFAULT_MAX_DISCHARGE_CURRENT,
+            "AbsorptionVoltage":    DEFAULT_ABSORPTION_VOLTAGE,
+            "FloatVoltage":         DEFAULT_FLOAT_VOLTAGE,
+            "TailCurrent":          DEFAULT_TAIL_CURRENT,
+            "MaxChargeTemp":        DEFAULT_MAX_CHARGE_TEMP,
+            "MinChargeTemp":        DEFAULT_MIN_CHARGE_TEMP,
+        }
+
+    def setup(self) -> None:
+        """Register settings with localsettings. Call once at startup."""
+        settings_map = {
+            # [dbus_path, default, min, max]
+            #
+            # Current limits — clamped at runtime to ESP32 overcurrent threshold
+            "MaxChargeCurrent": [
+                f"{self._BASE}/MaxChargeCurrent",
+                DEFAULT_MAX_CHARGE_CURRENT,
+                1.0,
+                CURRENT_HARD_CAP,
+            ],
+            "MaxDischargeCurrent": [
+                f"{self._BASE}/MaxDischargeCurrent",
+                DEFAULT_MAX_DISCHARGE_CURRENT,
+                1.0,
+                CURRENT_HARD_CAP,
+            ],
+            # Per-cell voltage targets for the Victron charge algorithm
+            # Absorption: held at this voltage until tail current is reached
+            "AbsorptionVoltage": [
+                f"{self._BASE}/AbsorptionVoltage",
+                DEFAULT_ABSORPTION_VOLTAGE,
+                3.50,   # V per cell — never go below this for absorption
+                4.25,   # V per cell — hard upper limit
+            ],
+            # Float: maintained after absorption complete
+            "FloatVoltage": [
+                f"{self._BASE}/FloatVoltage",
+                DEFAULT_FLOAT_VOLTAGE,
+                3.20,   # V per cell
+                4.20,   # V per cell
+            ],
+            # Tail current: charge considered complete when current drops below this
+            "TailCurrent": [
+                f"{self._BASE}/TailCurrent",
+                DEFAULT_TAIL_CURRENT,
+                0.5,    # A
+                50.0,   # A
+            ],
+            # Temperature window for charging
+            "MaxChargeTemp": [
+                f"{self._BASE}/MaxChargeTemp",
+                DEFAULT_MAX_CHARGE_TEMP,
+                20.0,   # °C
+                60.0,   # °C
+            ],
+            "MinChargeTemp": [
+                f"{self._BASE}/MinChargeTemp",
+                DEFAULT_MIN_CHARGE_TEMP,
+                -10.0,  # °C
+                20.0,   # °C
+            ],
+        }
+
+        self._sd = SettingsDevice(
+            bus=self._bus,
+            supportedSettings=settings_map,
+            eventCallback=self._on_setting_changed,
+            name=SETTINGS_SERVICE,
+            timeout=10,
+        )
+
+        # Seed cache from whatever localsettings currently holds
+        for key in self._cache:
+            try:
+                self._cache[key] = self._sd[key]
+            except Exception:
+                pass
+
+        log.info(f"VenusSettings ready: {self._cache}")
+
+    def _on_setting_changed(self, setting: str, old_value, new_value) -> None:
+        log.info(f"Setting '{setting}' changed: {old_value} → {new_value}")
+        self._cache[setting] = new_value
+
+    # ─── Read accessors ───────────────────────────────────────────────────────
+
+    @property
+    def max_charge_current(self) -> float:
+        return float(self._cache["MaxChargeCurrent"])
+
+    @property
+    def max_discharge_current(self) -> float:
+        return float(self._cache["MaxDischargeCurrent"])
+
+    @property
+    def absorption_voltage(self) -> float:
+        return float(self._cache["AbsorptionVoltage"])
+
+    @property
+    def float_voltage(self) -> float:
+        return float(self._cache["FloatVoltage"])
+
+    @property
+    def tail_current(self) -> float:
+        return float(self._cache["TailCurrent"])
+
+    @property
+    def max_charge_temp(self) -> float:
+        return float(self._cache["MaxChargeTemp"])
+
+    @property
+    def min_charge_temp(self) -> float:
+        return float(self._cache["MinChargeTemp"])
+
+    def effective_max_charge_current(self, overcurrent_threshold: float) -> float:
+        """
+        Returns the effective CCL — the lower of:
+          - User-configured MaxChargeCurrent
+          - ESP32 EEPROM overcurrent threshold (contactor rating)
+        Ensures the user can never accidentally set a limit above the
+        hardware safety threshold.
+        """
+        return min(self.max_charge_current, overcurrent_threshold)
+
+    def effective_max_discharge_current(self, overcurrent_threshold: float) -> float:
+        """Same enforcement for DCL."""
+        return min(self.max_discharge_current, overcurrent_threshold)
+
+    def pack_absorption_voltage(self, cell_count: int) -> float:
+        """Absorption CVL for the full pack."""
+        return round(self.absorption_voltage * cell_count, 2)
+
+    def pack_float_voltage(self, cell_count: int) -> float:
+        """Float CVL for the full pack."""
+        return round(self.float_voltage * cell_count, 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TeslaBMSSerial — UART handler + decoded state (background thread)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TeslaBMSSerial:
     """
-    Runs a background daemon thread that:
+    Background daemon thread that:
       1. Auto-detects and opens the ESP32 serial port.
-      2. Hunts for 0xAA start bytes and reads 27-byte frames.
+      2. Hunts for 0xAA start bytes and reads 29-byte frames.
       3. Validates CRC-16/MODBUS.
-      4. Decodes all 24 payload bytes into public attributes.
+      4. Decodes all 26 payload bytes into public attributes.
 
     The main GLib thread reads these attributes every publish cycle.
     send_command() is thread-safe via a lock on the serial port.
     """
 
     def __init__(self):
-        # ── Live telemetry (from payload bytes 0-13) ──────────────────────────
-        self.voltage         = 0.0    # V
-        self.current         = 0.0    # A  (positive = charging)
-        self.soc             = 50     # %
-        self.temperature     = 25.0   # °C
-        self.power           = 0      # W
-        self.avg_cell_volt   = 3.30   # V
-        self.alarm_flags     = 0      # raw bitmask
-        self.overlord_state  = 0      # 0=Normal 1=Fault 2=StorageMode
-        self.contactor_state = 0      # raw enum
+        # ── Live telemetry ────────────────────────────────────────────────────
+        self.voltage         = 0.0
+        self.current         = 0.0
+        self.soc             = 50
+        self.temperature     = 25.0
+        self.power           = 0
+        self.avg_cell_volt   = 3.30
+        self.alarm_flags     = 0
+        self.overlord_state  = 0
+        self.contactor_state = 0
 
-        # ── EEPROM config (from payload bytes 14-21) ──────────────────────────
-        # These are updated on EVERY frame — always current, no staleness risk.
-        self.eep_overvoltage  = 4.25   # V per cell
-        self.eep_undervoltage = 2.90   # V per cell
-        self.eep_overtemp     = 60.0   # °C
-        self.eep_undertemp    = -10.0  # °C
-        self.eep_num_modules  = 28     # total modules detected
-        self.eep_num_strings  = 2      # parallel strings
+        # ── EEPROM config (updated every frame) ───────────────────────────────
+        self.eep_overvoltage        = 4.25
+        self.eep_undervoltage       = 2.90
+        self.eep_overtemp           = 60.0
+        self.eep_undertemp          = -10.0
+        self.eep_num_modules        = 2
+        self.eep_num_strings        = 1
+        self.eep_overcurrent_thresh = 350.0   # A — from EEPROM OVERCURRENT_THRESHOLD_A
 
-        # ── Derived pack values (recalculated on every frame) ─────────────────
-        self.cell_count   = 14         # series cells per string
-        self.capacity_ah  = 232.0      # Ah
+        # ── Derived ───────────────────────────────────────────────────────────
+        self.cell_count  = 6
+        self.capacity_ah = 232.0
 
-        # ── Connection bookkeeping ────────────────────────────────────────────
+        # ── Connection ────────────────────────────────────────────────────────
         self.connected        = False
         self.last_frame_time  = 0.0
         self.frame_count      = 0
@@ -192,26 +360,15 @@ class TeslaBMSSerial:
         self._thread               = None
         self._last_connect_attempt = 0.0
 
-    # ─── Derived pack limits (always computed live from EEPROM fields) ────────
+    # ���── Derived pack limits ──────────────────────────────────────────────────
 
     @property
     def pack_overvoltage(self) -> float:
-        """Absolute pack OV limit = cell OV × series cells."""
         return round(self.eep_overvoltage * self.cell_count, 2)
 
     @property
     def pack_undervoltage(self) -> float:
-        """Absolute pack UV limit = cell UV × series cells."""
         return round(self.eep_undervoltage * self.cell_count, 2)
-
-    @property
-    def pack_float_voltage(self) -> float:
-        """
-        CVL sent to the charger = (cell OV - CELL_FLOAT_OFFSET) × series cells.
-        Keeps the charger from perpetually pushing to the absolute cell max.
-        The ESP32 still opens the contactor independently if OV is breached.
-        """
-        return round((self.eep_overvoltage - CELL_FLOAT_OFFSET) * self.cell_count, 2)
 
     @property
     def charge_fet(self) -> bool:
@@ -233,10 +390,6 @@ class TeslaBMSSerial:
     # ─── Port detection ───────────────────────────────────────────────────────
 
     def _probe_port(self, port: str) -> bool:
-        """
-        Open port, send EXT_CMD_SEND_DATA, verify we get a valid 27-byte reply.
-        Returns True if the port is confirmed as a TeslaBMS-ESP32.
-        """
         try:
             ser = serial.Serial(port, BAUD_RATE, timeout=0.8)
             log.info(f"Probing {port} …")
@@ -267,7 +420,7 @@ class TeslaBMSSerial:
         log.info("No TeslaBMS-ESP32 found.")
         return None
 
-    # ─── Connection management ────────────────────────────────────────────────
+    # ─── Connection ───────────────────────────────────────────────────────────
 
     def _connect(self) -> bool:
         with self._lock:
@@ -304,14 +457,10 @@ class TeslaBMSSerial:
                 self._port     = None
                 self.connected = False
 
-    # ─── Command send (thread-safe) ───────────────────────────────────────────
+    # ─── Command send ─────────────────────────────────────────────────────────
 
     def send_command(self, cmd: int) -> bool:
-        """
-        Transmit a 4-byte command frame: [0xAA][cmd][CRC_lo][CRC_hi]
-        CRC is computed over the single command byte only.
-        Safe to call from any thread.
-        """
+        """Transmit a 4-byte command frame. Thread-safe."""
         cmd_byte  = bytes([cmd])
         frame_out = (bytes([FRAME_START_BYTE])
                      + cmd_byte
@@ -335,54 +484,52 @@ class TeslaBMSSerial:
                 self.connected = False
                 return False
 
-    # ─── Frame parser ─────────────────────────────────────────────���───────────
+    # ─── Frame parser ─────────────────────────────────────────────────────────
 
     def _parse_frame(self, payload: bytes) -> bool:
-        """
-        Decode all 24 payload bytes and update instance attributes.
-
-        Called from the reader thread on every validated frame.
-        Attribute writes are atomic for Python basic types, so the main
-        thread can read them safely without an explicit lock.
-        """
+        """Decode all 26 payload bytes and update instance attributes."""
         try:
             # ── Live telemetry ─────────────────────────────────────────────
             pack_v_raw,   = struct.unpack_from(">H", payload, 0)
-            pack_i_raw,   = struct.unpack_from(">h", payload, 2)   # signed
+            pack_i_raw,   = struct.unpack_from(">h", payload, 2)
             soc           = payload[4]
-            temp_c,       = struct.unpack_from("b",  payload, 5)   # signed
-            power_w,      = struct.unpack_from(">h", payload, 6)   # signed
+            temp_c,       = struct.unpack_from("b",  payload, 5)
+            power_w,      = struct.unpack_from(">h", payload, 6)
             avg_cell_raw, = struct.unpack_from(">H", payload, 8)
             alarm_flags,  = struct.unpack_from(">H", payload, 10)
             overlord      = payload[12]
             contactor_st  = payload[13]
 
-            self.voltage         = pack_v_raw  / 100.0   # 10 mV → V
-            self.current         = pack_i_raw  / 10.0    # 100 mA → A
+            self.voltage         = pack_v_raw  / 100.0
+            self.current         = pack_i_raw  / 10.0
             self.soc             = int(soc)
             self.temperature     = float(temp_c)
             self.power           = int(power_w)
-            self.avg_cell_volt   = avg_cell_raw / 100.0  # 10 mV → V
+            self.avg_cell_volt   = avg_cell_raw / 100.0
             self.alarm_flags     = alarm_flags
             self.overlord_state  = overlord
             self.contactor_state = contactor_st
 
             # ── EEPROM config ──────────────────────────────────────────────
-            # These are transmitted in every frame — always authoritative,
-            # always current.  No staleness, no separate config request.
             over_v_raw,  = struct.unpack_from(">H", payload, 14)
             under_v_raw, = struct.unpack_from(">H", payload, 16)
-            over_t,      = struct.unpack_from("b",  payload, 18)   # signed
-            under_t,     = struct.unpack_from("b",  payload, 19)   # signed
+            over_t,      = struct.unpack_from("b",  payload, 18)
+            under_t,     = struct.unpack_from("b",  payload, 19)
             num_modules  = payload[20]
             num_strings  = payload[21]
 
-            self.eep_overvoltage  = over_v_raw  / 1000.0   # 1 mV → V
-            self.eep_undervoltage = under_v_raw / 1000.0
-            self.eep_overtemp     = float(over_t)
-            self.eep_undertemp    = float(under_t)
-            self.eep_num_modules  = num_modules
-            self.eep_num_strings  = max(num_strings, 1)   # guard against /0
+            # Overcurrent threshold — 0.1A resolution
+            over_i_raw,  = struct.unpack_from(">H", payload, 22)
+
+            self.eep_overvoltage        = over_v_raw  / 1000.0
+            self.eep_undervoltage       = under_v_raw / 1000.0
+            self.eep_overtemp           = float(over_t)
+            self.eep_undertemp          = float(under_t)
+            self.eep_num_modules        = num_modules
+            self.eep_num_strings        = max(num_strings, 1)
+            self.eep_overcurrent_thresh = over_i_raw  / 10.0   # 0.1A → A
+
+            # bytes 24-25 reserved — ignored
 
             # ── Derived topology ───────────────────────────────────────────
             self.cell_count  = self.eep_num_modules // self.eep_num_strings
@@ -390,7 +537,7 @@ class TeslaBMSSerial:
                 (self.eep_num_modules / self.eep_num_strings) * AH_PER_MODULE, 1
             )
 
-            # ── Bookkeeping ────────────────────────────────────────────────
+            # ── Bookkeeping ───────────────────────────────────────��────────
             self.last_frame_time = time.time()
             self.frame_count    += 1
 
@@ -399,9 +546,10 @@ class TeslaBMSSerial:
                 f"{self.voltage:.2f}V {self.current:+.1f}A "
                 f"SOC={self.soc}% {self.temperature}°C "
                 f"OV={self.eep_overvoltage:.3f}V UV={self.eep_undervoltage:.3f}V "
-                f"OT={self.eep_overtemp}°C UT={self.eep_undertemp}°C "
+                f"OC={self.eep_overcurrent_thresh:.1f}A "
                 f"mod={num_modules} str={num_strings} "
-                f"cells={self.cell_count}S cap={self.capacity_ah}Ah"
+                f"cells={self.cell_count}S cap={self.capacity_ah}Ah "
+                f"alarms=0x{alarm_flags:04X}"
             )
             return True
 
@@ -412,49 +560,35 @@ class TeslaBMSSerial:
     # ─── Background reader loop ───────────────────────────────────────────────
 
     def _reader_loop(self) -> None:
-        """
-        Daemon thread main loop.
-
-        1. Ensures the serial port is open (retries every 5 s).
-        2. Scans the byte stream for 0xAA start bytes.
-        3. Reads the remaining 26 bytes (payload + CRC).
-        4. Validates CRC; on success calls _parse_frame().
-        5. If no valid frame has arrived within STALE_TIMEOUT, demands one.
-        """
         log.info("Reader thread started.")
 
         while not self._stop_event.is_set():
 
-            # ── Ensure connected ───────────────────────────────────────────
             if not self._connect():
                 time.sleep(1.0)
                 continue
 
             try:
-                # ── Hunt for start byte ────────────────────────────────────
-                # Read one byte at a time; cap iterations to avoid an
-                # infinite spin on a stream of garbage bytes.
+                # Hunt for start byte
                 found = False
                 for _ in range(FRAME_LEN * 4):
                     with self._lock:
                         raw = self._ser.read(1) if self._ser and self._ser.is_open else b""
                     if not raw:
-                        # Serial read timeout — no data in the window
                         break
                     if raw[0] == FRAME_START_BYTE:
                         found = True
                         break
 
                 if not found:
-                    # Check if we've gone stale and need to demand a frame
                     age = time.time() - self.last_frame_time
                     if self.last_frame_time > 0 and age > STALE_TIMEOUT:
                         log.debug(f"No frame for {age:.1f}s — requesting data")
                         self.send_command(EXT_CMD_SEND_DATA)
                     continue
 
-                # ── Read payload + CRC (26 bytes after the start byte) ─────
-                remainder = PAYLOAD_LEN + 2   # 26
+                # Read payload + CRC
+                remainder = PAYLOAD_LEN + 2   # 28
                 with self._lock:
                     rest = self._ser.read(remainder) if self._ser and self._ser.is_open else b""
 
@@ -462,18 +596,15 @@ class TeslaBMSSerial:
                     log.warning(f"Short frame: got {len(rest)}/{remainder} bytes")
                     continue
 
-                # ── Validate CRC ───────────────────────────────────────────
+                # Validate CRC
                 payload  = rest[:PAYLOAD_LEN]
                 crc_rx   = struct.unpack("<H", rest[PAYLOAD_LEN:])[0]
                 crc_calc = crc16_modbus(payload)
 
                 if crc_calc != crc_rx:
-                    log.warning(
-                        f"CRC mismatch: calc=0x{crc_calc:04X} rx=0x{crc_rx:04X}"
-                    )
+                    log.warning(f"CRC mismatch: calc=0x{crc_calc:04X} rx=0x{crc_rx:04X}")
                     continue
 
-                # ── Good frame ─────────────────────────────────────────────
                 self._parse_frame(payload)
 
             except serial.SerialException as exc:
@@ -488,14 +619,10 @@ class TeslaBMSSerial:
 
         log.info("Reader thread stopped.")
 
-    # ─── Thread lifecycle ─────────────────────────────────────────────────────
-
     def start(self) -> None:
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._reader_loop,
-            name="teslabms-reader",
-            daemon=True,
+            target=self._reader_loop, name="teslabms-reader", daemon=True
         )
         self._thread.start()
 
@@ -511,33 +638,22 @@ class TeslaBMSSerial:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_dbus_service(bus) -> VeDbusService:
-    """
-    Register com.victronenergy.battery.teslabms on the D-Bus.
-
-    /Config/* paths are read-only mirrors of the ESP32 EEPROM values.
-    They are updated every publish cycle so dbus-spy / VRM / Node-RED
-    always show the current hardware configuration.
-
-    /Control/* paths are writable command triggers.
-    """
     svc = VeDbusService(DBUS_SERVICE_NAME, bus=bus, register=False)
 
-    # ── Management ────────────────────────────────────────────────────────────
+    # ── Management / identity ─────────────────────────────────────────────────
     svc.add_path("/Mgmt/ProcessName",    __file__)
-    svc.add_path("/Mgmt/ProcessVersion", "1.2.0")
+    svc.add_path("/Mgmt/ProcessVersion", "1.3.0")
     svc.add_path("/Mgmt/Connection",     "USB Serial (auto-detect)")
-
-    # ── Identity ──────────────────────────────────────────────────────────────
     svc.add_path("/DeviceInstance",  1)
     svc.add_path("/ProductId",       0xBA77)
     svc.add_path("/ProductName",     "TeslaBMS-ESP32")
-    svc.add_path("/FirmwareVersion", "1.2")
+    svc.add_path("/FirmwareVersion", "1.3")
     svc.add_path("/HardwareVersion", "ESP32 HEX v1.0")
     svc.add_path("/Connected",       0)
     svc.add_path("/CustomName",      "TeslaBMS", writeable=True)
     svc.add_path("/Serial",          "TESLABMS001")
 
-    # ── State ─────────��───────────────────────────────────────────────────────
+    # ── State ─────────────────────────────────────────────────────────────────
     svc.add_path("/State",     0)
     svc.add_path("/ErrorCode", None)
 
@@ -556,12 +672,13 @@ def build_dbus_service(bus) -> VeDbusService:
     svc.add_path("/InstalledCapacity", None, writeable=True, gettextcallback=lambda p, v: f"{v:.0f}Ah")
     svc.add_path("/ConsumedAmphours",  None, writeable=True, gettextcallback=lambda p, v: f"{v:.0f}Ah")
 
-    # ── CVL / CCL / DCL (DVCC) ────────────────────────────────────────────────
+    # ── CVL / CCL / DCL ───────────────────────────────────────────────────────
     svc.add_path("/Info/MaxChargeVoltage",    None, writeable=True, gettextcallback=lambda p, v: f"{v:.2f}V")
     svc.add_path("/Info/BatteryLowVoltage",   None, writeable=True)
     svc.add_path("/Info/MaxChargeCurrent",    None, writeable=True, gettextcallback=lambda p, v: f"{v:.2f}A")
     svc.add_path("/Info/MaxDischargeCurrent", None, writeable=True, gettextcallback=lambda p, v: f"{v:.2f}A")
     svc.add_path("/Info/ChargeMode",          None, writeable=True)
+    svc.add_path("/Info/TailCurrent",         None, writeable=True, gettextcallback=lambda p, v: f"{v:.1f}A")
 
     # ── System / cell data ────────────────────────────────────────────────────
     svc.add_path("/System/NrOfCellsPerBattery",         None, writeable=True)
@@ -583,7 +700,7 @@ def build_dbus_service(bus) -> VeDbusService:
     svc.add_path("/Io/AllowToDischarge", 0, writeable=True)
     svc.add_path("/Io/AllowToBalance",   None, writeable=True)
 
-    # ── Alarms (0=OK 1=Warning 2=Alarm) ──────────────────────────────────────
+    # ── Alarms ────────────────────────────────────────────────────────────────
     svc.add_path("/Alarms/LowVoltage",           None, writeable=True)
     svc.add_path("/Alarms/HighVoltage",          None, writeable=True)
     svc.add_path("/Alarms/LowCellVoltage",       None, writeable=True)
@@ -602,20 +719,27 @@ def build_dbus_service(bus) -> VeDbusService:
     svc.add_path("/History/MinimumTemperature", None, writeable=True)
     svc.add_path("/History/MaximumTemperature", None, writeable=True)
 
-    # ── Live EEPROM config mirror (read-only, updated every frame) ────────────
-    # These paths let Node-RED / dbus-spy / VRM see exactly what the ESP32
-    # currently has in EEPROM without any separate config request.
-    svc.add_path("/Config/CellOverVoltage",  None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Config/CellUnderVoltage", None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Config/CellFloatVoltage", None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Config/OverTemp",         None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Config/UnderTemp",        None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Config/NumModules",       None, writeable=False)
-    svc.add_path("/Config/NumStrings",       None, writeable=False)
-    svc.add_path("/Config/CellCount",        None, writeable=False)
-    svc.add_path("/Config/CapacityAh",       None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}Ah")
+    # ── Live EEPROM config mirror (read-only) ─────────────────────────────────
+    svc.add_path("/Config/CellOverVoltage",      None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Config/CellUnderVoltage",     None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Config/OverTemp",             None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
+    svc.add_path("/Config/UnderTemp",            None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
+    svc.add_path("/Config/NumModules",           None, writeable=False)
+    svc.add_path("/Config/NumStrings",           None, writeable=False)
+    svc.add_path("/Config/CellCount",            None, writeable=False)
+    svc.add_path("/Config/CapacityAh",           None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}Ah")
+    svc.add_path("/Config/OverCurrentThreshold", None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}A")
 
-    # ── Command triggers (write 1 to fire, auto-clears to 0) ─────────────────
+    # ── User settings mirror (read-only display of what localsettings holds) ──
+    svc.add_path("/Settings/MaxChargeCurrent",    None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}A")
+    svc.add_path("/Settings/MaxDischargeCurrent", None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}A")
+    svc.add_path("/Settings/AbsorptionVoltage",   None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Settings/FloatVoltage",        None, writeable=False, gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Settings/TailCurrent",         None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}A")
+    svc.add_path("/Settings/MaxChargeTemp",       None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
+    svc.add_path("/Settings/MinChargeTemp",       None, writeable=False, gettextcallback=lambda p, v: f"{v:.1f}°C")
+
+    # ── Commands ──────────────────────────────────────────────────────────────
     svc.add_path("/Control/Shutdown", 0, writeable=True)
     svc.add_path("/Control/Startup",  0, writeable=True)
 
@@ -624,19 +748,15 @@ def build_dbus_service(bus) -> VeDbusService:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Publish callback — fires every PUBLISH_INTERVAL_MS via GLib timer
+#  Publish callback
 # ─────────────────────────────────────────────────────────────────────────────
 
 _history = {"min_v": None, "max_v": None, "min_t": None, "max_t": None}
 
 
-def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
-    """
-    Reads the latest decoded state from *bms* and writes it to D-Bus.
-    Returns True to keep the GLib timer running.
-    """
+def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
 
-    # ── 1. Command control ────────────────────────────────────────────────────
+    # ── 1. Commands ───────────────────────────────────────────────────────────
     if svc["/Control/Shutdown"] == 1:
         log.info("D-Bus → SHUTDOWN")
         bms.send_command(EXT_CMD_SHUTDOWN)
@@ -647,18 +767,18 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
         bms.send_command(EXT_CMD_STARTUP)
         svc["/Control/Startup"] = 0
 
-    # ── 2. Connection / online state ──────────────────────────────────────────
+    # ── 2. Connection state ───────────────────────────────────────────────────
     online = not bms.is_stale
-    svc["/Connected"]                    = 1 if online else 0
-    svc["/System/NrOfModulesOnline"]     = 1 if online else 0
-    svc["/System/NrOfModulesOffline"]    = 0 if online else 1
-    svc["/Alarms/BmsCable"]              = ALARM_OK if online else ALARM_WARNING
+    svc["/Connected"]                 = 1 if online else 0
+    svc["/System/NrOfModulesOnline"]  = 1 if online else 0
+    svc["/System/NrOfModulesOffline"] = 0 if online else 1
+    svc["/Alarms/BmsCable"]           = ALARM_OK if online else ALARM_WARNING
 
     if not online:
         svc["/State"] = 0
         return True
 
-    # ── 3. Core telemetry ──────────────────────────────────────────────────────
+    # ── 3. Core telemetry ─────────────────────────────────────────────────────
     svc["/Soc"]              = bms.soc
     svc["/Dc/0/Voltage"]     = round(bms.voltage,     2)
     svc["/Dc/0/Current"]     = round(bms.current,     2)
@@ -675,32 +795,46 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
     svc["/System/MinCellTemperature"]   = round(bms.temperature, 1)
     svc["/System/MaxCellTemperature"]   = round(bms.temperature, 1)
 
-    # ── 5. Capacity ────────────────────────────────────────────────────────────
+    # ── 5. Capacity ───────────────────────────────────────────────────────────
     cap_remain   = round(bms.capacity_ah * bms.soc / 100.0, 2)
     cap_consumed = round(bms.capacity_ah - cap_remain, 2)
     svc["/InstalledCapacity"]  = bms.capacity_ah
     svc["/Capacity"]           = cap_remain
-    svc["/ConsumedAmphours"]   = -cap_consumed   # Victron convention: negative
+    svc["/ConsumedAmphours"]   = -cap_consumed
 
     # ── 6. CVL / CCL / DCL ───────────────────────────────────────────────────
-    # pack_float_voltage = (EEPROM OV - CELL_FLOAT_OFFSET) × cell_count
-    # This is recalculated from the live EEPROM values in every frame,
-    # so a user changing thresholds in the BMS configurator is reflected
-    # in Venus OS within one heartbeat interval (~1 s).
-    svc["/Info/MaxChargeVoltage"]    = bms.pack_float_voltage
+    # CVL: use absorption voltage during bulk/absorption, float voltage after.
+    # For now we publish absorption voltage as MaxChargeVoltage — the Victron
+    # DVCC system manages the bulk→absorption→float transition using
+    # TailCurrent as the end-of-absorption trigger.
+    #
+    # CCL / DCL: user setting clamped by ESP32 overcurrent threshold.
+    # Neither can exceed the contactor's hardware rating.
+    #
+    # Charge inhibit: if temperature is outside the charge window, CCL = 0.
+    temp_ok_for_charge = (
+        bms.temperature >= vs.min_charge_temp and
+        bms.temperature <= vs.max_charge_temp
+    )
+
+    ccl = vs.effective_max_charge_current(bms.eep_overcurrent_thresh)
+    dcl = vs.effective_max_discharge_current(bms.eep_overcurrent_thresh)
+
+    svc["/Info/MaxChargeVoltage"]    = vs.pack_absorption_voltage(bms.cell_count)
     svc["/Info/BatteryLowVoltage"]   = bms.pack_undervoltage
-    svc["/Info/MaxChargeCurrent"]    = MAX_CHARGE_CURRENT    if bms.charge_fet    else 0.0
-    svc["/Info/MaxDischargeCurrent"] = MAX_DISCHARGE_CURRENT if bms.discharge_fet else 0.0
+    svc["/Info/MaxChargeCurrent"]    = round(ccl, 1) if (bms.charge_fet and temp_ok_for_charge) else 0.0
+    svc["/Info/MaxDischargeCurrent"] = round(dcl, 1) if bms.discharge_fet else 0.0
+    svc["/Info/TailCurrent"]         = vs.tail_current
     svc["/Info/ChargeMode"]          = (
-        "Normal"  if bms.overlord_state == OVERLORD_NORMAL
-        else "Storage" if bms.overlord_state == OVERLORD_STORAGE
-        else "Fault"
+        "Normal"  if bms.overlord_state == OVERLORD_NORMAL  else
+        "Storage" if bms.overlord_state == OVERLORD_STORAGE else
+        "Fault"
     )
 
     # ── 7. FET / IO flags ─────────────────────────────────────────────────────
-    svc["/Io/AllowToCharge"]                     = 1 if bms.charge_fet    else 0
+    svc["/Io/AllowToCharge"]                     = 1 if (bms.charge_fet and temp_ok_for_charge) else 0
     svc["/Io/AllowToDischarge"]                  = 1 if bms.discharge_fet else 0
-    svc["/System/NrOfModulesBlockingCharge"]     = 0 if bms.charge_fet    else 1
+    svc["/System/NrOfModulesBlockingCharge"]     = 0 if (bms.charge_fet and temp_ok_for_charge) else 1
     svc["/System/NrOfModulesBlockingDischarge"]  = 0 if bms.discharge_fet else 1
 
     # ── 8. State machine ──────────────────────────────────────────────────────
@@ -711,7 +845,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
     else:
         svc["/State"] = 9
 
-    # ── 9. Alarms ───────────────────────���─────────────────────────────────────
+    # ── 9. Alarms ─────────────────────────────────────────────────────────────
     svc["/Alarms/LowVoltage"]            = bms.alarm_level(ALARM_UNDER_VOLTAGE)
     svc["/Alarms/HighVoltage"]           = bms.alarm_level(ALARM_OVER_VOLTAGE)
     svc["/Alarms/LowCellVoltage"]        = bms.alarm_level(ALARM_UNDER_VOLTAGE)
@@ -726,21 +860,31 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
         ALARM_WARNING if bms.soc < 10 else
         ALARM_OK
     )
+    # Temperature charge inhibit warning
+    if not temp_ok_for_charge and online:
+        log.debug(f"Charge inhibited: temp {bms.temperature}°C outside [{vs.min_charge_temp}, {vs.max_charge_temp}]°C")
 
-    # ── 10. Live EEPROM config mirror ─────────────────────────────────────────
-    # Reflects the exact values currently in ESP32 EEPROM.
-    # Updated every cycle — no staleness possible.
-    svc["/Config/CellOverVoltage"]  = round(bms.eep_overvoltage,  3)
-    svc["/Config/CellUnderVoltage"] = round(bms.eep_undervoltage, 3)
-    svc["/Config/CellFloatVoltage"] = round(bms.eep_overvoltage - CELL_FLOAT_OFFSET, 3)
-    svc["/Config/OverTemp"]         = bms.eep_overtemp
-    svc["/Config/UnderTemp"]        = bms.eep_undertemp
-    svc["/Config/NumModules"]       = bms.eep_num_modules
-    svc["/Config/NumStrings"]       = bms.eep_num_strings
-    svc["/Config/CellCount"]        = bms.cell_count
-    svc["/Config/CapacityAh"]       = bms.capacity_ah
+    # ── 10. EEPROM config mirror ───────────────────────────────────────────────
+    svc["/Config/CellOverVoltage"]      = round(bms.eep_overvoltage,        3)
+    svc["/Config/CellUnderVoltage"]     = round(bms.eep_undervoltage,       3)
+    svc["/Config/OverTemp"]             = bms.eep_overtemp
+    svc["/Config/UnderTemp"]            = bms.eep_undertemp
+    svc["/Config/NumModules"]           = bms.eep_num_modules
+    svc["/Config/NumStrings"]           = bms.eep_num_strings
+    svc["/Config/CellCount"]            = bms.cell_count
+    svc["/Config/CapacityAh"]           = bms.capacity_ah
+    svc["/Config/OverCurrentThreshold"] = round(bms.eep_overcurrent_thresh, 1)
 
-    # ── 11. History (in-memory lifetime min/max) ──────────────────────────────
+    # ── 11. User settings mirror ───────────────────────────────────────────────
+    svc["/Settings/MaxChargeCurrent"]    = vs.max_charge_current
+    svc["/Settings/MaxDischargeCurrent"] = vs.max_discharge_current
+    svc["/Settings/AbsorptionVoltage"]   = vs.absorption_voltage
+    svc["/Settings/FloatVoltage"]        = vs.float_voltage
+    svc["/Settings/TailCurrent"]         = vs.tail_current
+    svc["/Settings/MaxChargeTemp"]       = vs.max_charge_temp
+    svc["/Settings/MinChargeTemp"]       = vs.min_charge_temp
+
+    # ── 12. History ───────────────────────────────────────────────────────────
     if _history["min_v"] is None or bms.voltage     < _history["min_v"]: _history["min_v"] = bms.voltage
     if _history["max_v"] is None or bms.voltage     > _history["max_v"]: _history["max_v"] = bms.voltage
     if _history["min_t"] is None or bms.temperature < _history["min_t"]: _history["min_t"] = bms.temperature
@@ -760,7 +904,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService) -> bool:
 
 def main() -> None:
     log.info("=" * 62)
-    log.info("  TeslaBMS-ESP32 Venus OS driver v1.2 starting …")
+    log.info("  TeslaBMS-ESP32 Venus OS driver v1.3 starting …")
     log.info("=" * 62)
 
     DBusGMainLoop(set_as_default=True)
@@ -771,13 +915,19 @@ def main() -> None:
         else dbus.SystemBus()
     )
 
+    # ── User settings (persistent, localsettings) ─────────────────────────────
+    vs = VenusSettings(bus)
+    vs.setup()
+
+    # ── Serial BMS handler ────────────────────────────────────────────────────
     bms = TeslaBMSSerial()
     bms.start()
 
+    # ── D-Bus service ─────────────────────────────────────────────────────────
     svc = build_dbus_service(bus)
     log.info(f"D-Bus service '{DBUS_SERVICE_NAME}' registered.")
 
-    GLib.timeout_add(PUBLISH_INTERVAL_MS, lambda: publish(bms, svc))
+    GLib.timeout_add(PUBLISH_INTERVAL_MS, lambda: publish(bms, svc, vs))
 
     mainloop = GLib.MainLoop()
 

@@ -30,7 +30,7 @@ uint16_t ExternalCommsLayer::calculateCRC16(const uint8_t* data, size_t length) 
     return crc;
 }
 
-// ─── Payload builder (24 bytes) ───────────────────────────────────────────────
+// ─── Payload builder (26 bytes) ───────────────────────────────────────────────
 
 void ExternalCommsLayer::buildPayload(uint8_t* payload) {
 
@@ -42,16 +42,16 @@ void ExternalCommsLayer::buildPayload(uint8_t* payload) {
     float avgCellVoltV      = bms.getAvgCellVolt();
     float powerW            = packVoltageV * packCurrentA;
 
-    uint16_t packV   = (uint16_t)round(packVoltageV * 100.0f);   // 10 mV steps
-    int16_t  packI   = (int16_t) round(packCurrentA * 10.0f);    // 100 mA steps
+    uint16_t packV   = (uint16_t)round(packVoltageV * 100.0f);  // 10 mV steps
+    int16_t  packI   = (int16_t) round(packCurrentA * 10.0f);   // 100 mA steps
     uint8_t  soc     = summary.soc;
     int8_t   temp    = (int8_t)  round(avgTempC);
     int16_t  power   = (int16_t) round(powerW);
-    uint16_t avgCell = (uint16_t)round(avgCellVoltV * 100.0f);   // 10 mV steps
+    uint16_t avgCell = (uint16_t)round(avgCellVoltV * 100.0f);  // 10 mV steps
 
     // ── Alarm flags ────────────────────────────────────────────────────────
+    // Bits 5-15 are reserved and default to 0 until Overlord exposes them
     uint16_t alarmFlags = ALARM_NONE;
-    // Expand here as Overlord exposes more fault bits
 
     // ── Overlord state ─────────────────────────────────────────────────────
     uint8_t overlordState = 0;
@@ -65,53 +65,61 @@ void ExternalCommsLayer::buildPayload(uint8_t* payload) {
 
     uint8_t contactorState = (uint8_t)contactor.getState();
 
-    // ── EEPROM config — read fresh every frame so Venus OS always sees
-    //    the current value without any separate config request ────────────
-    uint16_t overV    = (uint16_t)round(eepromdata.OVERVOLTAGE  * 1000.0f); // 1 mV steps
-    uint16_t underV   = (uint16_t)round(eepromdata.UNDERVOLTAGE * 1000.0f);
-    int8_t   overT    = (int8_t)  round(eepromdata.OVERTEMP);   // whole °C, fits int8
-    int8_t   underT   = (int8_t)  round(eepromdata.UNDERTEMP);
-    uint8_t  modules  = (uint8_t) bms.getNumberOfModules();
-    uint8_t  strings  = (uint8_t) eepromdata.PARALLEL_STRINGS;
+    // ── EEPROM config — read fresh every frame ─────────────────────────────
+    uint16_t overV   = (uint16_t)round(eepromdata.OVERVOLTAGE           * 1000.0f); // 1 mV steps
+    uint16_t underV  = (uint16_t)round(eepromdata.UNDERVOLTAGE          * 1000.0f);
+    int8_t   overT   = (int8_t)  round(eepromdata.OVERTEMP);
+    int8_t   underT  = (int8_t)  round(eepromdata.UNDERTEMP);
+    uint8_t  modules = (uint8_t) bms.getNumberOfModules();
+    uint8_t  strings = (uint8_t) eepromdata.PARALLEL_STRINGS;
 
-    // ── Pack into 24 bytes (big-endian for all multi-byte fields) ──────────
+    // Overcurrent threshold — 0.1A resolution, uint16
+    // eepromdata.OVERCURRENT_THRESHOLD_A is a float in Amps
+    uint16_t overCurrent = (uint16_t)round(eepromdata.OVERCURRENT_THRESHOLD_A * 10.0f);
+
+    // ── Pack into 26 bytes (big-endian for all multi-byte fields) ──────────
     size_t i = 0;
 
     // Live telemetry
-    payload[i++] = (packV >> 8)      & 0xFF;   payload[i++] = packV      & 0xFF;  // [0-1]
-    payload[i++] = (packI >> 8)      & 0xFF;   payload[i++] = packI      & 0xFF;  // [2-3]
-    payload[i++] = soc;                                                             // [4]
-    payload[i++] = (uint8_t)temp;                                                   // [5]
-    payload[i++] = (power >> 8)      & 0xFF;   payload[i++] = power      & 0xFF;  // [6-7]
-    payload[i++] = (avgCell >> 8)    & 0xFF;   payload[i++] = avgCell    & 0xFF;  // [8-9]
+    payload[i++] = (packV >> 8)      & 0xFF;  payload[i++] = packV      & 0xFF;  // [0-1]
+    payload[i++] = (packI >> 8)      & 0xFF;  payload[i++] = packI      & 0xFF;  // [2-3]
+    payload[i++] = soc;                                                            // [4]
+    payload[i++] = (uint8_t)temp;                                                  // [5]
+    payload[i++] = (power >> 8)      & 0xFF;  payload[i++] = power      & 0xFF;  // [6-7]
+    payload[i++] = (avgCell >> 8)    & 0xFF;  payload[i++] = avgCell    & 0xFF;  // [8-9]
 
     // Status
-    payload[i++] = (alarmFlags >> 8) & 0xFF;   payload[i++] = alarmFlags & 0xFF;  // [10-11]
-    payload[i++] = overlordState;                                                   // [12]
-    payload[i++] = contactorState;                                                  // [13]
+    payload[i++] = (alarmFlags >> 8) & 0xFF;  payload[i++] = alarmFlags & 0xFF;  // [10-11]
+    payload[i++] = overlordState;                                                  // [12]
+    payload[i++] = contactorState;                                                 // [13]
 
-    // EEPROM config (refreshed every frame)
-    payload[i++] = (overV  >> 8) & 0xFF;       payload[i++] = overV  & 0xFF;      // [14-15]
-    payload[i++] = (underV >> 8) & 0xFF;       payload[i++] = underV & 0xFF;      // [16-17]
-    payload[i++] = (uint8_t)overT;                                                  // [18]
-    payload[i++] = (uint8_t)underT;                                                 // [19]
-    payload[i++] = modules;                                                         // [20]
-    payload[i++] = strings;                                                         // [21]
-    payload[i++] = 0x00;                                                            // [22] reserved
-    payload[i++] = 0x00;                                                            // [23] reserved
+    // EEPROM config
+    payload[i++] = (overV >> 8)      & 0xFF;  payload[i++] = overV      & 0xFF;  // [14-15]
+    payload[i++] = (underV >> 8)     & 0xFF;  payload[i++] = underV     & 0xFF;  // [16-17]
+    payload[i++] = (uint8_t)overT;                                                 // [18]
+    payload[i++] = (uint8_t)underT;                                                // [19]
+    payload[i++] = modules;                                                        // [20]
+    payload[i++] = strings;                                                        // [21]
 
-    // i == EXT_PAYLOAD_LEN (24) — assert in debug builds if desired
+    // Overcurrent threshold
+    payload[i++] = (overCurrent >> 8) & 0xFF; payload[i++] = overCurrent & 0xFF; // [22-23]
+
+    // Reserved
+    payload[i++] = 0x00;                                                           // [24]
+    payload[i++] = 0x00;                                                           // [25]
+
+    // i == EXT_PAYLOAD_LEN (26)
 }
 
 // ─── Frame transmitter ────────────────────────────────────────────────────────
 
 void ExternalCommsLayer::sendPacket() {
-    // Frame: [0xAA][24-byte payload][CRC_lo][CRC_hi]
+    // Frame: [0xAA][26-byte payload][CRC_lo][CRC_hi]
     txBuffer[0] = 0xAA;
     buildPayload(&txBuffer[1]);
     uint16_t crc = calculateCRC16(&txBuffer[1], EXT_PAYLOAD_LEN);
-    txBuffer[25] = crc & 0xFF;          // CRC low byte
-    txBuffer[26] = (crc >> 8) & 0xFF;   // CRC high byte
+    txBuffer[27] = crc & 0xFF;          // CRC low byte
+    txBuffer[28] = (crc >> 8) & 0xFF;   // CRC high byte
     EXTERNAL_COMM_SERIAL.write(txBuffer, EXT_FRAME_LEN);
 }
 
@@ -125,7 +133,7 @@ bool ExternalCommsLayer::processIncomingCommand() {
 
     if (buf[0] != 0xAA) return false;
 
-    // Validate CRC over the single command byte
+    // Validate CRC over the single command byte only
     uint16_t calcCRC = calculateCRC16(&buf[1], 1);
     uint16_t rxCRC   = buf[2] | (buf[3] << 8);
     if (calcCRC != rxCRC) return false;
@@ -139,16 +147,16 @@ bool ExternalCommsLayer::processIncomingCommand() {
     }
     // EXT_CMD_SEND_DATA: no special action, fall through to sendPacket()
 
-    sendPacket();   // always reply with a fresh full frame
+    sendPacket();
     return true;
 }
 
-// ─── Main update (call every loop) ───────────────────────────────────────────
+// ─── Main update ──────────────────────────────────────────────────────────────
 
 void ExternalCommsLayer::update() {
     bool hadCommand = processIncomingCommand();
     if (!hadCommand) {
-        sendPacket();   // unsolicited heartbeat ~every loop interval
+        sendPacket();   // unsolicited heartbeat
     }
 }
 
