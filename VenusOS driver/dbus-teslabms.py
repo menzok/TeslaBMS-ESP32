@@ -404,16 +404,20 @@ class TeslaBMSSerial:
             log.info(f"Probing {port} …")
             cmd   = bytes([EXT_CMD_SEND_DATA])
             frame = bytes([FRAME_START_BYTE]) + cmd + struct.pack("<H", crc16_modbus(cmd))
-            ser.write(frame)
-            time.sleep(1.2)
-            data = ser.read(FRAME_LEN)
+            for attempt in range(1, CMD_RETRIES + 1):
+                ser.reset_input_buffer()          # flush stale bytes before each send
+                ser.write(frame)
+                time.sleep(2.5)                   # wait for ESP32 loop tick + reply margin
+                data = ser.read(FRAME_LEN)
+                if len(data) >= FRAME_LEN and data[0] == FRAME_START_BYTE:
+                    payload = data[1: 1 + PAYLOAD_LEN]
+                    crc_rx  = struct.unpack("<H", data[1 + PAYLOAD_LEN: FRAME_LEN])[0]
+                    if crc16_modbus(payload) == crc_rx:
+                        ser.close()
+                        log.info(f"✅ TeslaBMS-ESP32 confirmed on {port}")
+                        return True
+                log.debug(f"  {port}: no valid reply (attempt {attempt}/{CMD_RETRIES})")
             ser.close()
-            if len(data) >= FRAME_LEN and data[0] == FRAME_START_BYTE:
-                payload = data[1: 1 + PAYLOAD_LEN]
-                crc_rx  = struct.unpack("<H", data[1 + PAYLOAD_LEN: FRAME_LEN])[0]
-                if crc16_modbus(payload) == crc_rx:
-                    log.info(f"✅ TeslaBMS-ESP32 confirmed on {port}")
-                    return True
         except Exception as exc:
             log.debug(f"  {port}: {exc}")
         return False
