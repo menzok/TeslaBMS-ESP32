@@ -136,7 +136,8 @@ void ExternalCommsLayer::sendPacket() {
 
 void ExternalCommsLayer::processIncomingCommand() {
     if (EXTERNAL_COMM_SERIAL.available() < 4) return;
-
+    Serial.printf("External UART buffer: %d bytes available\n",
+        EXTERNAL_COMM_SERIAL.available());
     uint8_t buf[4];
     EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
     Serial.print("Raw data (4 bytes): ");
@@ -145,9 +146,14 @@ void ExternalCommsLayer::processIncomingCommand() {
     }
 
     if (buf[0] != 0xAA) {
-        Serial.println("→ Invalid start byte (not 0xAA) - ignoring");
+        Serial.println("→ Invalid start byte (not expected start bit) - ignoring");
         // Flush remaining garbage so the next frame starts clean
-        while (EXTERNAL_COMM_SERIAL.available()) EXTERNAL_COMM_SERIAL.read();
+        Serial.print("→ Discarding garbage: ");
+        while (EXTERNAL_COMM_SERIAL.available()) {
+            uint8_t b = EXTERNAL_COMM_SERIAL.read();
+            Serial.printf("0x%02X ", b);
+        }
+        Serial.println("(buffer cleared)");
         return;
     }
 

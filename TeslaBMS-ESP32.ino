@@ -29,11 +29,11 @@ void setup() {
 }
 
 void loop() {
-   
+    ExternalComms.update();
     if (millis() - lastUpdate >= 1000UL) {
         lastUpdate = millis();
 		Overlord.update();
-        ExternalComms.update();
+       // ExternalComms.update();
         
     }
 	menu.loop();
