@@ -126,46 +126,41 @@ void ExternalCommsLayer::sendPacket() {
 
 // ─── Command processor ──────────────────────────────────────────────────────
 //
-// Fully non-blocking: drains available bytes into a 4-byte accumulator one at
-// a time and returns immediately on each call.  The accumulator persists across
-// loop() ticks so partial frames received mid-tick are handled transparently.
+// Non-blocking by design: if fewer than 4 bytes are in the UART hardware buffer
+// we return immediately and let the next loop() tick check again.  The hardware
+// RX FIFO holds bytes safely between ticks so no bytes are ever lost.
 //
-// Start-byte scanning: any byte that does not belong to a frame that started
-// with 0xAA is discarded, so the receiver self-resyncs automatically after
-// converter glitches or line noise without flushing large chunks or spinning.
+// If the first byte is not 0xAA the buffer is flushed so stale or garbage bytes
+// (e.g. converter glitch noise) don't block the next valid frame.
 //
 
 void ExternalCommsLayer::processIncomingCommand() {
-    while (EXTERNAL_COMM_SERIAL.available() > 0) {
-        uint8_t b = (uint8_t)EXTERNAL_COMM_SERIAL.read();
+    if (EXTERNAL_COMM_SERIAL.available() < 4) return;
 
-        if (_rxCount == 0) {
-            // Scan for start byte — silently discard anything that isn't 0xAA
-            if (b != 0xAA) continue;
-        }
+    uint8_t buf[4];
+    EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
 
-        _rxBuf[_rxCount++] = b;
-
-        if (_rxCount < 4) continue;   // frame not complete yet — come back next tick
-
-        // ── Full 4-byte frame assembled ──────────────────────────────────
-        _rxCount = 0;   // reset accumulator regardless of outcome
-
-        uint16_t calcCRC = calculateCRC16(&_rxBuf[1], 1);
-        uint16_t rxCRC   = _rxBuf[2] | (_rxBuf[3] << 8);
-        if (calcCRC != rxCRC) continue;   // bad CRC — discard and keep scanning
-
-        uint8_t cmd = _rxBuf[1];
-
-        if (cmd == EXT_CMD_SHUTDOWN) {
-            Overlord.requestShutdown();
-        } else if (cmd == EXT_CMD_STARTUP) {
-            Overlord.requestStartup();
-        }
-        // EXT_CMD_SEND_DATA: no special action, fall through to sendPacket()
-
-        sendPacket();
+    if (buf[0] != 0xAA) {
+        // Flush remaining garbage so the next frame starts clean
+        while (EXTERNAL_COMM_SERIAL.available()) EXTERNAL_COMM_SERIAL.read();
+        return;
     }
+
+    // Validate CRC over the single command byte only
+    uint16_t calcCRC = calculateCRC16(&buf[1], 1);
+    uint16_t rxCRC   = buf[2] | (buf[3] << 8);
+    if (calcCRC != rxCRC) return;
+
+    uint8_t cmd = buf[1];
+
+    if (cmd == EXT_CMD_SHUTDOWN) {
+        Overlord.requestShutdown();
+    } else if (cmd == EXT_CMD_STARTUP) {
+        Overlord.requestStartup();
+    }
+    // EXT_CMD_SEND_DATA: no special action, fall through to sendPacket()
+
+    sendPacket();
 }
 
 // ─── Main update ──────────────────────────────────────────────────────────────
