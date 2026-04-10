@@ -139,8 +139,13 @@ void ExternalCommsLayer::processIncomingCommand() {
 
     uint8_t buf[4];
     EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
+    Serial.print("Raw data (4 bytes): ");
+    for (int i = 0; i < 4; i++) {
+        Serial.printf("0x%02X ", buf[i]);
+    }
 
     if (buf[0] != 0xAA) {
+        Serial.println("→ Invalid start byte (not 0xAA) - ignoring");
         // Flush remaining garbage so the next frame starts clean
         while (EXTERNAL_COMM_SERIAL.available()) EXTERNAL_COMM_SERIAL.read();
         return;
@@ -149,9 +154,11 @@ void ExternalCommsLayer::processIncomingCommand() {
     // Validate CRC over the single command byte only
     uint16_t calcCRC = calculateCRC16(&buf[1], 1);
     uint16_t rxCRC   = buf[2] | (buf[3] << 8);
+    Serial.printf("→ CRC check: calculated=0x%04X, received=0x%04X ", calcCRC, rxCRC);
     if (calcCRC != rxCRC) return;
 
     uint8_t cmd = buf[1];
+    Serial.printf("→ Command received: 0x%02X\n", cmd);
 
     if (cmd == EXT_CMD_SHUTDOWN) {
         Overlord.requestShutdown();
