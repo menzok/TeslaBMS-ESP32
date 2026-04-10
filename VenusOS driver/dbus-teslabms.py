@@ -400,8 +400,15 @@ class TeslaBMSSerial:
 
     def _probe_port(self, port: str) -> bool:
         try:
-            ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S)
+            # dsrdtr=False / rtscts=False: keep DTR and RTS de-asserted so the
+            # USB-UART bridge does not trigger the ESP32 auto-reset circuit.
+            ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S,
+                                dsrdtr=False, rtscts=False)
+            ser.dtr = False   # explicit: do not pull EN low via auto-reset RC
+            ser.rts = False
             log.info(f"Probing {port} …")
+            # Brief settle so line stabilises after open without a device reset
+            time.sleep(0.1)
             cmd   = bytes([EXT_CMD_SEND_DATA])
             frame = bytes([FRAME_START_BYTE]) + cmd + struct.pack("<H", crc16_modbus(cmd))
             for attempt in range(1, CMD_RETRIES + 1):
@@ -450,7 +457,10 @@ class TeslaBMSSerial:
 
         try:
             with self._lock:
-                self._ser      = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S)
+                self._ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S,
+                                          dsrdtr=False, rtscts=False)
+                self._ser.dtr = False   # keep DTR low — do not trigger ESP32 auto-reset
+                self._ser.rts = False
                 self._port     = port
                 self.connected = True
             log.info(f"✅ Connected on {port}")
