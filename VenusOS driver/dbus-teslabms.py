@@ -66,7 +66,7 @@ from gi.repository import GLib
 import dbus
 
 # ── velib_python ──────────────────────────────────────────────────────────────
-VELIB_PATH = "data/apps/dbus-serialbattery/ext/velib_python"
+VELIB_PATH = "/data/apps/dbus-serialbattery/ext/velib_python"
 sys.path.insert(1, VELIB_PATH)
 from vedbus import VeDbusService           # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
@@ -400,12 +400,12 @@ class TeslaBMSSerial:
 
     def _probe_port(self, port: str) -> bool:
         try:
-            ser = serial.Serial(port, BAUD_RATE, timeout=0.8)
+            ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S)
             log.info(f"Probing {port} …")
             cmd   = bytes([EXT_CMD_SEND_DATA])
             frame = bytes([FRAME_START_BYTE]) + cmd + struct.pack("<H", crc16_modbus(cmd))
             ser.write(frame)
-            time.sleep(0.3)
+            time.sleep(1.2)
             data = ser.read(FRAME_LEN)
             ser.close()
             if len(data) >= FRAME_LEN and data[0] == FRAME_START_BYTE:

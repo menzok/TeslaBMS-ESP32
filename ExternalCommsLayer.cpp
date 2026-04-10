@@ -124,15 +124,37 @@ void ExternalCommsLayer::sendPacket() {
     EXTERNAL_COMM_SERIAL.write(txBuffer, EXT_FRAME_LEN);
 }
 
-// ─── Command processor ────────────────────────────────────────────────────────
+// ─── Command processor ──────────────────────────────────────────────────────
+//
+// Waits up to CMD_FRAME_TIMEOUT_MS for all 4 command bytes to arrive.
+// The available() < 4 instant-snapshot guard was removed because update() fires
+// once per loop tick (~1s): if bytes arrive mid-tick, the old guard would bail
+// before readBytes() could wait for the remainder, leaving stale partial bytes
+// in the buffer that corrupt the next frame.
+//
+// If frame sync is lost (first byte is not 0xAA), the buffer is flushed so
+// subsequent commands are not blocked by garbage bytes.
+//
+#define CMD_FRAME_TIMEOUT_MS  10   // max ms to wait for all 4 bytes to land
 
 void ExternalCommsLayer::processIncomingCommand() {
-    if (EXTERNAL_COMM_SERIAL.available() < 4) return;
+    // Wait up to CMD_FRAME_TIMEOUT_MS for at least 4 bytes
+    uint32_t deadline = millis() + CMD_FRAME_TIMEOUT_MS;
+    while (EXTERNAL_COMM_SERIAL.available() < 4 && (int32_t)(millis() - deadline) < 0) {
+        // tight spin — CMD_FRAME_TIMEOUT_MS is small (10ms), won't stall the loop
+    }
+    if (EXTERNAL_COMM_SERIAL.available() < 4) return;  // nothing arrived in time
 
     uint8_t buf[4];
     EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
 
-    if (buf[0] != 0xAA) return;
+    if (buf[0] != 0xAA) {
+        // Frame sync lost — flush all buffered garbage so next command can be received cleanly
+        while (EXTERNAL_COMM_SERIAL.available()) {
+            EXTERNAL_COMM_SERIAL.read();
+        }
+        return;
+    }
 
     // Validate CRC over the single command byte only
     uint16_t calcCRC = calculateCRC16(&buf[1], 1);
