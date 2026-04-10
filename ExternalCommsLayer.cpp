@@ -156,9 +156,16 @@ bool ExternalCommsLayer::processIncomingCommand() {
 
 void ExternalCommsLayer::update() {
     bool hadCommand = processIncomingCommand();
-    if (!hadCommand) {
-        sendPacket();   // unsolicited heartbeat
-    }
+    // Unsolicited heartbeat disabled — sending unprompted packets causes a
+    // race condition on the Pi side: bytes land in the OS kernel buffer
+    // between _probe_port() closing the port and _connect() re-opening it,
+    // triggering a false "device reports readiness to read but returned no data"
+    // SerialException and a Venus OS BMS cable fault.
+    // The Pi driver polls with CMD 0x03 on its own schedule; reply-only is correct.
+    //
+    // if (!hadCommand) {
+    //     sendPacket();   // unsolicited heartbeat
+    // }
 }
 
 // Global instance

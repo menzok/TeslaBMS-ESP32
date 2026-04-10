@@ -86,7 +86,7 @@ DEFAULT_MAX_CHARGE_TEMP       = 45.0    # °C (charge inhibit above)
 DEFAULT_MIN_CHARGE_TEMP       = 5.0     # °C (charge inhibit below)
 
 # Timing
-STALE_TIMEOUT       = 2.5
+STALE_TIMEOUT       = 1.5   # tightened from 2.5 — ESP32 is now purely request/reply
 OFFLINE_TIMEOUT     = 15.0
 BAUD_RATE           = 115200
 PUBLISH_INTERVAL_MS = 1000
