@@ -3,7 +3,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #  dbus-teslabms.py  —  Standalone Venus OS battery driver for TeslaBMS-ESP32
-#  Version 1.4.0
+#  Version 1.5.0
 #
 #  Protocol change: the ESP32 is now purely request/reply — it only transmits
 #  in response to a CMD 0x03 command and never sends unsolicited packets.
@@ -54,6 +54,7 @@
 import os
 import sys
 import signal
+import subprocess
 import time
 import threading
 import struct
@@ -398,6 +399,57 @@ class TeslaBMSSerial:
     def alarm_level(self, bit: int) -> int:
         return ALARM_ALARM if (self.alarm_flags & bit) else ALARM_OK
 
+    # ─── Serial-starter control ───────────────────────────────────────────────
+
+    @staticmethod
+    def _serial_starter_stop(port: str) -> None:
+        """
+        Ask Venus OS serial-starter to release *port* so it cannot poll or
+        re-open it while we own the connection.
+
+        *port* may be a full path (/dev/ttyUSB0) or a bare name (ttyUSB0).
+        Errors are logged but never raised — the connection must proceed even
+        if serial-starter is absent (e.g. development machines).
+        """
+        tty = os.path.basename(port)
+        script = "/opt/victronenergy/serial-starter/stop-tty.sh"
+        try:
+            result = subprocess.run([script, tty], timeout=5,
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                log.info(f"serial-starter: stopped {tty}")
+            else:
+                log.warning(f"serial-starter stop-tty.sh returned {result.returncode}: "
+                            f"{result.stderr.strip()}")
+        except FileNotFoundError:
+            log.debug("serial-starter stop-tty.sh not found — skipping")
+        except Exception as exc:
+            log.warning(f"serial-starter stop-tty.sh error: {exc}")
+
+    @staticmethod
+    def _serial_starter_start(port: str) -> None:
+        """
+        Notify Venus OS serial-starter that *port* is free so it may resume
+        normal management of the TTY (e.g. offer it to other drivers).
+
+        Called on every clean disconnect so the port is not left permanently
+        locked out if the BMS cable is unplugged.
+        """
+        tty = os.path.basename(port)
+        script = "/opt/victronenergy/serial-starter/start-tty.sh"
+        try:
+            result = subprocess.run([script, tty], timeout=5,
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                log.info(f"serial-starter: started {tty}")
+            else:
+                log.warning(f"serial-starter start-tty.sh returned {result.returncode}: "
+                            f"{result.stderr.strip()}")
+        except FileNotFoundError:
+            log.debug("serial-starter start-tty.sh not found — skipping")
+        except Exception as exc:
+            log.warning(f"serial-starter start-tty.sh error: {exc}")
+
     # ─── Port detection ───────────────────────────────────────────────────────
 
     def _probe_port(self, port: str) -> "serial.Serial | None":
@@ -484,10 +536,13 @@ class TeslaBMSSerial:
             self._port     = ser.port
             self.connected = True
         log.info(f"✅ Connected on {ser.port}")
+        # Block serial-starter from polling this port while we own it.
+        self._serial_starter_stop(ser.port)
         return True
 
     def _disconnect(self) -> None:
         with self._lock:
+            port = self._port          # capture before clearing
             if self._ser:
                 try:
                     self._ser.close()
@@ -496,6 +551,9 @@ class TeslaBMSSerial:
                 self._ser      = None
                 self._port     = None
                 self.connected = False
+        # Re-enable serial-starter for this port now that we have released it.
+        if port:
+            self._serial_starter_start(port)
 
     # ─── Command send ─────────────────────────────────────────────────────────
 
@@ -507,6 +565,8 @@ class TeslaBMSSerial:
                      + struct.pack("<H", crc16_modbus(cmd_byte)))
 
         for attempt in range(1, CMD_RETRIES + 1):
+            write_error_port = None   # set if a write error forces inline disconnect
+
             with self._lock:
                 if not self._ser or not self._ser.is_open:
                     log.warning(f"send_command(0x{cmd:02X}): not connected")
@@ -523,24 +583,31 @@ class TeslaBMSSerial:
                         self._ser.close()
                     except Exception:
                         pass
+                    write_error_port = self._port   # capture before clearing
                     self._ser      = None
                     self._port     = None
                     self.connected = False
-                    return False
+                    # fall through — lock is released, then we restart serial-starter below
 
                 # Read reply within the same lock — no gap where bytes can be interleaved
-                try:
-                    raw = self._ser.read(1)
-                    if raw and raw[0] == FRAME_START_BYTE:
-                        rest = self._ser.read(PAYLOAD_LEN + 2)
-                        if len(rest) == PAYLOAD_LEN + 2:
-                            payload  = rest[:PAYLOAD_LEN]
-                            crc_rx   = struct.unpack("<H", rest[PAYLOAD_LEN:])[0]
-                            if crc16_modbus(payload) == crc_rx:
-                                self._parse_frame(payload)
-                                return True
-                except Exception as exc:
-                    log.error(f"send_command read error (attempt {attempt}): {exc}")
+                if write_error_port is None:
+                    try:
+                        raw = self._ser.read(1)
+                        if raw and raw[0] == FRAME_START_BYTE:
+                            rest = self._ser.read(PAYLOAD_LEN + 2)
+                            if len(rest) == PAYLOAD_LEN + 2:
+                                payload  = rest[:PAYLOAD_LEN]
+                                crc_rx   = struct.unpack("<H", rest[PAYLOAD_LEN:])[0]
+                                if crc16_modbus(payload) == crc_rx:
+                                    self._parse_frame(payload)
+                                    return True
+                    except Exception as exc:
+                        log.error(f"send_command read error (attempt {attempt}): {exc}")
+
+            # Re-enable serial-starter if we had a write error and cleared the port
+            if write_error_port:
+                self._serial_starter_start(write_error_port)
+                return False
 
             log.warning(f"send_command(0x{cmd:02X}): no valid reply on attempt {attempt}/{CMD_RETRIES}")
             if attempt < CMD_RETRIES:
@@ -684,7 +751,7 @@ def build_dbus_service(bus) -> VeDbusService:
 
     # ── Management / identity ─────────────────────────────────────────────────
     svc.add_path("/Mgmt/ProcessName",    __file__)
-    svc.add_path("/Mgmt/ProcessVersion", "1.4.0")
+    svc.add_path("/Mgmt/ProcessVersion", "1.5.0")
     svc.add_path("/Mgmt/Connection",     "USB Serial (auto-detect)")
     svc.add_path("/DeviceInstance",  1)
     svc.add_path("/ProductId",       0xBA77)
