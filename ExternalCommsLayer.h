@@ -57,6 +57,10 @@ private:
     void processIncomingCommand();
 
     uint8_t txBuffer[EXT_FRAME_LEN];
+
+    // Non-blocking RX accumulator — built up across loop() ticks
+    uint8_t _rxBuf[4];
+    uint8_t _rxCount = 0;
 };
 
 extern ExternalCommsLayer ExternalComms;

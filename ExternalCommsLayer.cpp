@@ -126,51 +126,46 @@ void ExternalCommsLayer::sendPacket() {
 
 // ─── Command processor ──────────────────────────────────────────────────────
 //
-// Waits up to CMD_FRAME_TIMEOUT_MS for all 4 command bytes to arrive.
-// The available() < 4 instant-snapshot guard was removed because update() fires
-// once per loop tick (~1s): if bytes arrive mid-tick, the old guard would bail
-// before readBytes() could wait for the remainder, leaving stale partial bytes
-// in the buffer that corrupt the next frame.
+// Fully non-blocking: drains available bytes into a 4-byte accumulator one at
+// a time and returns immediately on each call.  The accumulator persists across
+// loop() ticks so partial frames received mid-tick are handled transparently.
 //
-// If frame sync is lost (first byte is not 0xAA), the buffer is flushed so
-// subsequent commands are not blocked by garbage bytes.
+// Start-byte scanning: any byte that does not belong to a frame that started
+// with 0xAA is discarded, so the receiver self-resyncs automatically after
+// converter glitches or line noise without flushing large chunks or spinning.
 //
-#define CMD_FRAME_TIMEOUT_MS  10   // max ms to wait for all 4 bytes to land
 
 void ExternalCommsLayer::processIncomingCommand() {
-    // Wait up to CMD_FRAME_TIMEOUT_MS for at least 4 bytes
-    uint32_t deadline = millis() + CMD_FRAME_TIMEOUT_MS;
-    while (EXTERNAL_COMM_SERIAL.available() < 4 && (int32_t)(millis() - deadline) < 0) {
-        // tight spin — CMD_FRAME_TIMEOUT_MS is small (10ms), won't stall the loop
-    }
-    if (EXTERNAL_COMM_SERIAL.available() < 4) return;  // nothing arrived in time
+    while (EXTERNAL_COMM_SERIAL.available() > 0) {
+        uint8_t b = (uint8_t)EXTERNAL_COMM_SERIAL.read();
 
-    uint8_t buf[4];
-    EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
-
-    if (buf[0] != 0xAA) {
-        // Frame sync lost — flush all buffered garbage so next command can be received cleanly
-        while (EXTERNAL_COMM_SERIAL.available()) {
-            EXTERNAL_COMM_SERIAL.read();
+        if (_rxCount == 0) {
+            // Scan for start byte — silently discard anything that isn't 0xAA
+            if (b != 0xAA) continue;
         }
-        return;
+
+        _rxBuf[_rxCount++] = b;
+
+        if (_rxCount < 4) continue;   // frame not complete yet — come back next tick
+
+        // ── Full 4-byte frame assembled ──────────────────────────────────
+        _rxCount = 0;   // reset accumulator regardless of outcome
+
+        uint16_t calcCRC = calculateCRC16(&_rxBuf[1], 1);
+        uint16_t rxCRC   = _rxBuf[2] | (_rxBuf[3] << 8);
+        if (calcCRC != rxCRC) continue;   // bad CRC — discard and keep scanning
+
+        uint8_t cmd = _rxBuf[1];
+
+        if (cmd == EXT_CMD_SHUTDOWN) {
+            Overlord.requestShutdown();
+        } else if (cmd == EXT_CMD_STARTUP) {
+            Overlord.requestStartup();
+        }
+        // EXT_CMD_SEND_DATA: no special action, fall through to sendPacket()
+
+        sendPacket();
     }
-
-    // Validate CRC over the single command byte only
-    uint16_t calcCRC = calculateCRC16(&buf[1], 1);
-    uint16_t rxCRC   = buf[2] | (buf[3] << 8);
-    if (calcCRC != rxCRC) return;
-
-    uint8_t cmd = buf[1];
-
-    if (cmd == EXT_CMD_SHUTDOWN) {
-        Overlord.requestShutdown();
-    } else if (cmd == EXT_CMD_STARTUP) {
-        Overlord.requestStartup();
-    }
-    // EXT_CMD_SEND_DATA: no special action, fall through to sendPacket()
-
-    sendPacket();
 }
 
 // ─── Main update ──────────────────────────────────────────────────────────────
