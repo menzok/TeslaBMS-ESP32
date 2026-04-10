@@ -3,12 +3,13 @@
 #include "BMSOverlord.h"
 #include "ContactorController.h"
 #include "SOCCalculator.h"
-#include "eepromdata.h"
+#include "EEPROMSettings.h"
 
 extern BMSModuleManager    bms;
 extern BMSOverlord         Overlord;
 extern ContactorController contactor;
 extern SOCCalculator       socCalculator;
+extern EEPROMData		 eepromdata;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
