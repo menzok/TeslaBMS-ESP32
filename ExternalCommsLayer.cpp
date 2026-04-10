@@ -124,7 +124,15 @@ void ExternalCommsLayer::sendPacket() {
     EXTERNAL_COMM_SERIAL.write(txBuffer, EXT_FRAME_LEN);
 }
 
-// ─── Command processor ────────────────────────────────────────────────────────
+// ─── Command processor ──────────────────────────────────────────────────────
+//
+// Non-blocking by design: if fewer than 4 bytes are in the UART hardware buffer
+// we return immediately and let the next loop() tick check again.  The hardware
+// RX FIFO holds bytes safely between ticks so no bytes are ever lost.
+//
+// If the first byte is not 0xAA the buffer is flushed so stale or garbage bytes
+// (e.g. converter glitch noise) don't block the next valid frame.
+//
 
 void ExternalCommsLayer::processIncomingCommand() {
     if (EXTERNAL_COMM_SERIAL.available() < 4) return;
@@ -132,7 +140,11 @@ void ExternalCommsLayer::processIncomingCommand() {
     uint8_t buf[4];
     EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
 
-    if (buf[0] != 0xAA) return;
+    if (buf[0] != 0xAA) {
+        // Flush remaining garbage so the next frame starts clean
+        while (EXTERNAL_COMM_SERIAL.available()) EXTERNAL_COMM_SERIAL.read();
+        return;
+    }
 
     // Validate CRC over the single command byte only
     uint16_t calcCRC = calculateCRC16(&buf[1], 1);

@@ -66,7 +66,7 @@ from gi.repository import GLib
 import dbus
 
 # ── velib_python ──────────────────────────────────────────────────────────────
-VELIB_PATH = "data/apps/dbus-serialbattery/ext/velib_python"
+VELIB_PATH = "/data/apps/dbus-serialbattery/ext/velib_python"
 sys.path.insert(1, VELIB_PATH)
 from vedbus import VeDbusService           # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
@@ -94,6 +94,7 @@ DEFAULT_MIN_CHARGE_TEMP       = 5.0     # °C (charge inhibit below)
 SERIAL_TIMEOUT_S    = 1.5    # extra headroom for ESP32 loop scheduling
 POLL_INTERVAL_S     = 2.0    # how often Pi sends CMD 0x03 to request data
 CMD_RETRIES         = 3      # number of attempts before declaring a command failed
+CMD_RETRY_DELAY_S   = 1.0    # pause between retries — lets the ESP32 drain any converter noise before the next command arrives
 STALE_TIMEOUT       = 5.0    # flag data as stale if no frame received within this window
 OFFLINE_TIMEOUT     = 15.0   # flag as offline/cable-fault after this long with no frame
 BAUD_RATE           = 115200
@@ -400,20 +401,31 @@ class TeslaBMSSerial:
 
     def _probe_port(self, port: str) -> bool:
         try:
-            ser = serial.Serial(port, BAUD_RATE, timeout=0.8)
+            # dsrdtr=False / rtscts=False: keep DTR and RTS de-asserted so the
+            # USB-UART bridge does not trigger the ESP32 auto-reset circuit.
+            ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S,
+                                dsrdtr=False, rtscts=False)
+            ser.dtr = False   # explicit: do not pull EN low via auto-reset RC
+            ser.rts = False
             log.info(f"Probing {port} …")
+            # Brief settle so line stabilises after open without a device reset
+            time.sleep(0.1)
             cmd   = bytes([EXT_CMD_SEND_DATA])
             frame = bytes([FRAME_START_BYTE]) + cmd + struct.pack("<H", crc16_modbus(cmd))
-            ser.write(frame)
-            time.sleep(0.3)
-            data = ser.read(FRAME_LEN)
+            for attempt in range(1, CMD_RETRIES + 1):
+                ser.reset_input_buffer()          # flush stale bytes before each send
+                ser.write(frame)
+                time.sleep(2.5)                   # wait for ESP32 loop tick + reply margin
+                data = ser.read(FRAME_LEN)
+                if len(data) >= FRAME_LEN and data[0] == FRAME_START_BYTE:
+                    payload = data[1: 1 + PAYLOAD_LEN]
+                    crc_rx  = struct.unpack("<H", data[1 + PAYLOAD_LEN: FRAME_LEN])[0]
+                    if crc16_modbus(payload) == crc_rx:
+                        ser.close()
+                        log.info(f"✅ TeslaBMS-ESP32 confirmed on {port}")
+                        return True
+                log.debug(f"  {port}: no valid reply (attempt {attempt}/{CMD_RETRIES})")
             ser.close()
-            if len(data) >= FRAME_LEN and data[0] == FRAME_START_BYTE:
-                payload = data[1: 1 + PAYLOAD_LEN]
-                crc_rx  = struct.unpack("<H", data[1 + PAYLOAD_LEN: FRAME_LEN])[0]
-                if crc16_modbus(payload) == crc_rx:
-                    log.info(f"✅ TeslaBMS-ESP32 confirmed on {port}")
-                    return True
         except Exception as exc:
             log.debug(f"  {port}: {exc}")
         return False
@@ -446,7 +458,10 @@ class TeslaBMSSerial:
 
         try:
             with self._lock:
-                self._ser      = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S)
+                self._ser = serial.Serial(port, BAUD_RATE, timeout=SERIAL_TIMEOUT_S,
+                                          dsrdtr=False, rtscts=False)
+                self._ser.dtr = False   # keep DTR low — do not trigger ESP32 auto-reset
+                self._ser.rts = False
                 self._port     = port
                 self.connected = True
             log.info(f"✅ Connected on {port}")
@@ -516,6 +531,8 @@ class TeslaBMSSerial:
                             return True
 
                 log.warning(f"send_command(0x{cmd:02X}): no valid reply on attempt {attempt}/{CMD_RETRIES}")
+                if attempt < CMD_RETRIES:
+                    time.sleep(CMD_RETRY_DELAY_S)   # let ESP32 drain garbage before next attempt
 
             except Exception as exc:
                 log.error(f"send_command read error (attempt {attempt}): {exc}")
