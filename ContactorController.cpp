@@ -49,7 +49,7 @@ void ContactorController::update() {
         }
         else if (eepromdata.currentSensorPresent) {
             float current = socCalculator.getPackCurrentAmps();
-            if (fabsf(current) < 0.5f || (now - prechargeStartTime >= eepromdata.prechargeTimeoutMs)) {
+            if (fabsf(current) < 0.5f) {
                 prechargeDone = true;
             }
         }
@@ -65,8 +65,8 @@ void ContactorController::update() {
             postCloseDelayStart = now;
             currentState = CONNECTED;
         }
-        else if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
-            // safety timeout — precharge did not complete in time
+        else if (eepromdata.currentSensorPresent && now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
+            // current sensor present but current never dropped — something is wrong
             open();
             currentState = FAULT;
         }
