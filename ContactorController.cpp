@@ -55,22 +55,20 @@ void ContactorController::update() {
         }
         else {
             // timed fallback when no current sensor
-            if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
+            if (now - prechargeStartTime >= eepromdata.prechargeTimeoutMs) {
                 prechargeDone = true;
             }
-        }
-
-        // safety timeout
-        if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
-            open();
-            currentState = FAULT;
-            return;
         }
 
         if (prechargeDone) {
             digitalWrite(CONTACTOR_RELAY_PIN, HIGH);
             postCloseDelayStart = now;
             currentState = CONNECTED;
+        }
+        else if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
+            // safety timeout — precharge did not complete in time
+            open();
+            currentState = FAULT;
         }
         break;
     }
