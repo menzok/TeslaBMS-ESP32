@@ -241,6 +241,7 @@ void BMSOverlord::requestShutdown() {
     eepromdata.BMS_SHUTDOWN = true;           // <--- NEW: persist the disable
     EEPROMSettings::save();
     storageModeActive = true;
+    currentState = BMSState::Shutdown;
     Logger::warn("BMSOverlord: Shutdown requested - entering Storage mode");
 }
 
@@ -249,4 +250,5 @@ void BMSOverlord::requestStartup() {
     EEPROMSettings::save();
     storageModeActive = false;
     Logger::warn("BMSOverlord: Startup requested - returning to Normal mode");
+    currentState = BMSState::Normal;
 }
