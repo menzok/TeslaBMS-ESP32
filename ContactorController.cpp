@@ -1,4 +1,4 @@
-/*
+﻿/*
  * ContactorController.cpp
  */
 
@@ -24,9 +24,16 @@ void ContactorController::close() {
     if (currentState == CONNECTED) {
         return;                    // Already closed - do nothing
     }
+    unsigned long now = millis();
+	
 
-	prechargeStartTime = millis(); //note time and start pre-charge sequence (doesnt finish here, just starts it)
+    if (lastCloseAttemptTime != 0 && (now - lastCloseAttemptTime < 60000UL)) {
+        return;  // too soon → ignore this close request
+    }
 
+    lastCloseAttemptTime = now;
+    prechargeStartTime = now;  //note time and start pre-charge sequence (doesnt finish here, just starts it)
+    
     if (eepromdata.prechargeEnabled) {
         digitalWrite(PRECHARGE_RELAY_PIN, HIGH);
         currentState = PRECHARGING;
@@ -34,6 +41,7 @@ void ContactorController::close() {
     else {
         digitalWrite(CONTACTOR_RELAY_PIN, HIGH);
         currentState = CONNECTED;
+        postCloseDelayStart = now;
     }
 }
 
@@ -42,6 +50,7 @@ void ContactorController::update() {
 
     switch (currentState) {
     case PRECHARGING: {
+        bool prechargeTimedOut = (now - prechargeStartTime >= eepromdata.prechargeTimeoutMs);
         bool prechargeDone = false;
 
         if (!eepromdata.prechargeEnabled) {
@@ -49,31 +58,32 @@ void ContactorController::update() {
         }
         else if (eepromdata.currentSensorPresent) {
             float current = socCalculator.getPackCurrentAmps();
-            if (fabsf(current) < 0.5f || (now - prechargeStartTime >= eepromdata.prechargeTimeoutMs)) {
+            if (fabsf(current) < 0.5f && prechargeTimedOut) {
                 prechargeDone = true;
             }
         }
         else {
             // timed fallback when no current sensor
-            if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
+            if (prechargeTimedOut) {
                 prechargeDone = true;
             }
         }
 
-        // safety timeout
-        if (now - prechargeStartTime > eepromdata.prechargeTimeoutMs) {
-            open();
-            currentState = FAULT;
-            return;
-        }
-
         if (prechargeDone) {
+            // Precharge complete → close the main contactor
             digitalWrite(CONTACTOR_RELAY_PIN, HIGH);
             postCloseDelayStart = now;
             currentState = CONNECTED;
         }
+        else if (prechargeTimedOut) {
+            // Safety timeout: precharge never completed (current never dropped for sensor case)
+            open();
+            currentState = FAULT;
+        }
+        // else: still precharging, do nothing this cycle
         break;
     }
+
 
     case CONNECTED:
         // Turn off small pre-charge relay after 500 ms

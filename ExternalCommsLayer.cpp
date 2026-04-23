@@ -136,35 +136,35 @@ void ExternalCommsLayer::sendPacket() {
 
 void ExternalCommsLayer::processIncomingCommand() {
     if (EXTERNAL_COMM_SERIAL.available() < 4) return;
-    Serial.printf("External UART buffer: %d bytes available\n",
-        EXTERNAL_COMM_SERIAL.available());
+   // Serial.printf("External UART buffer: %d bytes available\n",
+   //     EXTERNAL_COMM_SERIAL.available());
     uint8_t buf[4];
     EXTERNAL_COMM_SERIAL.readBytes(buf, 4);
-    Serial.print("Raw data (4 bytes): ");
-    for (int i = 0; i < 4; i++) {
-        Serial.printf("0x%02X ", buf[i]);
-    }
+  //  Serial.print("Raw data (4 bytes): ");
+   // for (int i = 0; i < 4; i++) {
+     //   Serial.printf("0x%02X ", buf[i]);
+   // }
 
     if (buf[0] != 0xAA) {
-        Serial.println("→ Invalid start byte (not expected start bit) - ignoring");
+     //   Serial.println("→ Invalid start byte (not expected start bit) - ignoring");
         // Flush remaining garbage so the next frame starts clean
-        Serial.print("→ Discarding garbage: ");
+       // Serial.print("→ Discarding garbage: ");
         while (EXTERNAL_COMM_SERIAL.available()) {
             uint8_t b = EXTERNAL_COMM_SERIAL.read();
-            Serial.printf("0x%02X ", b);
+         //   Serial.printf("0x%02X ", b);
         }
-        Serial.println("(buffer cleared)");
+       // Serial.println("(buffer cleared)");
         return;
     }
 
     // Validate CRC over the single command byte only
     uint16_t calcCRC = calculateCRC16(&buf[1], 1);
     uint16_t rxCRC   = buf[2] | (buf[3] << 8);
-    Serial.printf("→ CRC check: calculated=0x%04X, received=0x%04X ", calcCRC, rxCRC);
+   // Serial.printf("→ CRC check: calculated=0x%04X, received=0x%04X ", calcCRC, rxCRC);
     if (calcCRC != rxCRC) return;
 
     uint8_t cmd = buf[1];
-    Serial.printf("→ Command received: 0x%02X\n", cmd);
+    //Serial.printf("→ Command received: 0x%02X\n", cmd);
 
     if (cmd == EXT_CMD_SHUTDOWN) {
         Overlord.requestShutdown();
