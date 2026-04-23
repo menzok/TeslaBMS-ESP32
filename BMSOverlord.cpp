@@ -13,14 +13,25 @@ void BMSOverlord::init() {
     };
     esp_task_wdt_init(&twdt_config);
     esp_task_wdt_add(NULL);
+    if (eepromdata.BMS_SHUTDOWN)
+    {
+        SERIALCONSOLE.println("BMS disabled via EEPROM flag - forcing shutdown");
+        requestShutdown();                       // this also saves the flag again (harmless)
+    }
 
     Serial.println("BMSOverlord: Init complete - watchdog enabled (30 s)");
 
     contactor.init();
-    SERIALCONSOLE.println("Scanning for connected BMS boards..."); //Scan for modules and print results
+    SERIALCONSOLE.println("Scanning for connected BMS boards...");
     bms.findBoards();
     if (bms.getNumberOfModules() == 0) {
         SERIALCONSOLE.println("No modules detected. Setup required.");
+        requestShutdown();   // No modules found - force shutdown to be safe until user configures and restarts
+    }
+    else if (eepromdata.expectedNumModules > 0 && bms.getNumberOfModules() != eepromdata.expectedNumModules) {
+        SERIALCONSOLE.printf("Module count mismatch! Expected %d, detected %d - forcing shutdown for safety\n",
+            eepromdata.expectedNumModules, bms.getNumberOfModules());
+        requestShutdown();
     }
     else {
         SERIALCONSOLE.printf("Found %d connected BMS modules\n", bms.getNumberOfModules());
@@ -227,11 +238,15 @@ void BMSOverlord::logFault(FaultEntry::Type type, uint8_t module, uint8_t cell, 
 
 
 void BMSOverlord::requestShutdown() {
+    eepromdata.BMS_SHUTDOWN = true;           // <--- NEW: persist the disable
+    EEPROMSettings::save();
     storageModeActive = true;
     Logger::warn("BMSOverlord: Shutdown requested - entering Storage mode");
 }
 
 void BMSOverlord::requestStartup() {
+    eepromdata.BMS_SHUTDOWN = false;           // <--- NEW: persist the disable
+    EEPROMSettings::save();
     storageModeActive = false;
     Logger::warn("BMSOverlord: Startup requested - returning to Normal mode");
 }

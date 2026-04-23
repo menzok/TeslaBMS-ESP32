@@ -4,7 +4,7 @@
 #include <EEPROM.h>
 
 // ====================== EEPROM Version ======================
-#define EEPROM_VERSION      0x14
+#define EEPROM_VERSION      0x15
 
 // ====================== Default Settings ======================
 // These defaults prioritize safety, longevity, and real-world solar/off-grid usage with Tesla modules
@@ -28,6 +28,8 @@ inline constexpr float DEFAULT_OVERCURRENT_THRESHOLD_A = 350.0f;
 inline constexpr uint32_t DEFAULT_STORAGE_WAKE_INTERVAL_MS = 24 * 60 * 60 * 1000UL;
 inline constexpr uint32_t DEFAULT_STORAGE_BALANCE_DURATION_MS = 120000UL;
 inline constexpr uint8_t DEFAULT_CELL_FAULT_DEBOUNCE = 3;
+inline constexpr uint8_t DEFAULT_EXPECTED_MODULES = 0;   
+inline constexpr bool    DEFAULT_BMS_SHUTDOWN = true;
 
 // ====================== EEPROM Settings Struct ======================
 struct FaultEntry {
@@ -78,6 +80,8 @@ typedef struct {
     uint32_t STORAGE_WAKE_INTERVAL_MS;  // How long to wait between storage mode wake cycles to balance and refresh the cells (e.g. 24 hours)
     uint32_t STORAGE_BALANCE_DURATION_MS;    // How long to keep the BMS awake and balancing during each storage mode wake cycle (e.g. 2 minutes)
     uint8_t CELL_FAULT_DEBOUNCE;  // number of consecutive fault readings before faulting (to prevent noise/chatter)
+    uint8_t expectedNumModules;
+	bool    BMS_SHUTDOWN;       
 } EEPROMData;
 
 

@@ -30,8 +30,10 @@
 #include "BMSModuleManager.h"
 #include "EEPROMSettings.h"
 #include "Logger.h"
+#include "BMSOverlord.h"
 
 extern BMSModuleManager bms;
+extern BMSOverlord Overlord;
 
 // ======================================================
 // SHARED FUNCTIONS
@@ -169,6 +171,7 @@ void Menu::handleWaitingForInput() {
     case EDIT_PARALLEL_STRINGS:
     case EDIT_STORAGE_WAKE_INTERVAL_HOURS:
     case EDIT_STORAGE_BALANCE_DURATION_MINS:
+    case EDIT_EXPECTED_NUM_MODULES:
         handleBatteryConfigWaitingInput();
         break;
 
@@ -600,6 +603,8 @@ void Menu::printBatteryConfigMenu() {
     SERIALCONSOLE.printf("1. Parallel Strings            [%d]\n", eepromdata.parallelStrings);                                       // Number of parallel battery strings; must be >= 1 to prevent division-by-zero
     SERIALCONSOLE.printf("2. Storage Wake Interval       [%lu hr]\n", (unsigned long)(eepromdata.STORAGE_WAKE_INTERVAL_MS / 3600000UL));    // How often to wake from storage mode for a balance cycle (stored as ms, shown in hours)
     SERIALCONSOLE.printf("3. Storage Balance Duration    [%lu min]\n", (unsigned long)(eepromdata.STORAGE_BALANCE_DURATION_MS / 60000UL));   // How long to stay awake and balance during each storage wake cycle (stored as ms, shown in minutes)
+    SERIALCONSOLE.printf("4. Expected Number of Modules  [%d]  (0 = auto-detect)\n", eepromdata.expectedNumModules);
+    SERIALCONSOLE.printf("5. BMS Shutdown Flag           [%s]\n", eepromdata.BMS_SHUTDOWN ? "DISABLED (safe)" : "ENABLED");
     SERIALCONSOLE.printf("   State of Charge             [%.1f %%]  (display only)\n", eepromdata.socPercent);                       // Current estimated state of charge — maintained by coulomb counting, read-only here
     SERIALCONSOLE.printf("   Coulomb Count               [%.3f Ah] (display only)\n", eepromdata.coulombCountAh);                    // Net amp-hours accumulated since last reset — read-only here
     SERIALCONSOLE.println("R. Reset Battery Config to defaults");
@@ -627,6 +632,23 @@ void Menu::handleBatteryConfigCommand(char c) {
         pendingEdit = EDIT_STORAGE_BALANCE_DURATION_MINS;
         currentState = WAITING_FOR_INPUT;
         break;
+    case '4':  
+        SERIALCONSOLE.printf("Current: %d  Enter new Expected Modules: \n",
+            eepromdata.expectedNumModules);
+        pendingEdit = EDIT_EXPECTED_NUM_MODULES;
+        currentState = WAITING_FOR_INPUT;
+        break;
+    case '5':   
+        if (eepromdata.BMS_SHUTDOWN) {
+            SERIALCONSOLE.println("Enabling BMS (calling Overlord.requestStartup())...");
+           Overlord.requestStartup();  
+        }
+        else {
+            SERIALCONSOLE.println("Disabling BMS (calling Overlord.requestShutdown())...");
+            Overlord.requestShutdown();  
+        }
+        returnToBatteryConfigMenu();     
+        return;
     case 'r':
     case 'R':
         SERIALCONSOLE.println("Resetting Battery Config to defaults...");
@@ -675,6 +697,20 @@ void Menu::handleBatteryConfigWaitingInput() {
         }
         else {
             SERIALCONSOLE.println("Invalid value. Must be 1 or greater (hours).");
+        }
+        break;
+    }
+    case EDIT_EXPECTED_NUM_MODULES: {
+        uint8_t newVal = (uint8_t)strtoul((char*)cmdBuffer, NULL, 10);
+        if (newVal <= 63) {
+            eepromdata.expectedNumModules = newVal;
+            EEPROMSettings::save();
+            SERIALCONSOLE.printf("Expected modules set to: %d %s\n",
+                eepromdata.expectedNumModules,
+                (eepromdata.expectedNumModules == 0) ? "(auto-detect)" : "");
+        }
+        else {
+            SERIALCONSOLE.println("Invalid value. Range: 0-63 (0 = auto-detect)");
         }
         break;
     }

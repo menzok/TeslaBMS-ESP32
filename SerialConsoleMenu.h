@@ -42,7 +42,8 @@ private:
         // Battery Config
         EDIT_PARALLEL_STRINGS,              // new: number of parallel battery strings
         EDIT_STORAGE_WAKE_INTERVAL_HOURS,   // new: storage wake interval (display/edit in hours, stored as ms)
-        EDIT_STORAGE_BALANCE_DURATION_MINS  // new: storage balance duration (display/edit in minutes, stored as ms)
+        EDIT_STORAGE_BALANCE_DURATION_MINS,// new: storage balance duration (display/edit in minutes, stored as ms)
+        EDIT_EXPECTED_NUM_MODULES
         // Add new editable fields here
     };
 

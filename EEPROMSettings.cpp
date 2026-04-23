@@ -96,6 +96,8 @@ void EEPROMSettings::resetBatteryConfig()
     eepromdata.parallelStrings = DEFAULT_PARALLEL_STRINGS;
     eepromdata.STORAGE_WAKE_INTERVAL_MS = DEFAULT_STORAGE_WAKE_INTERVAL_MS;
     eepromdata.STORAGE_BALANCE_DURATION_MS = DEFAULT_STORAGE_BALANCE_DURATION_MS;
+    eepromdata.expectedNumModules = DEFAULT_EXPECTED_MODULES;
+	eepromdata.BMS_SHUTDOWN = DEFAULT_BMS_SHUTDOWN;
     save();
 }
 
