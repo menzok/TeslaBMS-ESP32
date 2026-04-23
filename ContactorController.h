@@ -31,4 +31,5 @@ private:
     ContactorState currentState = OPEN;
     unsigned long prechargeStartTime = 0;
     unsigned long postCloseDelayStart = 0;
+    unsigned long faultStartTime = 0;     // time fault was entered, for retry cooldown
 };
