@@ -78,17 +78,12 @@ port configuration is required.
 | `python3` | Pre-installed on Venus OS v3.x |
 | `gi.repository.GLib` | Pre-installed on Venus OS v3.x |
 | `dbus-python` | Pre-installed on Venus OS |
-| `velib_python` | Ships with **dbus-serialbattery** (mr-manuel) |
+| `velib_python` | Pre-installed on Venus OS v3.x (`dbus-systemcalc-py`) |
 | `pyserial` | Pre-installed on Venus OS |
 
-**You must install `dbus-serialbattery` (mr-manuel) first**, even if you never use it for another BMS.
-The driver uses its bundled `velib_python` library located at:
-
-```
-/opt/victronenergy/dbus-serialbattery/ext/velib_python/
-```
-
-Install dbus-serialbattery from: https://github.com/mr-manuel/venus-os_dbus-serialbattery
+`velib_python` (`VeDbusService`, `SettingsDevice`) ships natively with Venus OS as part of
+`dbus-systemcalc-py` at `/opt/victronenergy/dbus-systemcalc-py/ext/velib_python`.
+No third-party packages are required.
 
 ---
 
@@ -749,7 +744,7 @@ and is **not** backward-compatible.
 ```bash
 cat /var/log/dbus-teslabms/current | tail -100
 # Common causes:
-# - velib_python not found  → install dbus-serialbattery first
+# - velib_python not found  → verify Venus OS v3.x installation (dbus-systemcalc-py should be present)
 # - Wrong Venus OS version  → need v3.x for gi.repository.GLib
 # - Permission error on /dev/ttyUSBx  → should not happen running as root
 ```

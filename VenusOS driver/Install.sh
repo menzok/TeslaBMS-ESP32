@@ -81,11 +81,12 @@ else
 fi
 
 # Confirm that velib_python is present (needed at driver runtime)
-VELIB="/opt/victronenergy/dbus-serialbattery/ext/velib_python"
-if [[ ! -d "$VELIB" ]]; then
-    warn "velib_python not found at ${VELIB}."
-    warn "The driver may fail to start if dbus-serialbattery is not installed."
-    warn "Install dbus-serialbattery (mr-manuel) first, or adjust VELIB_PATH in dbus-teslabms.py."
+VELIB_NATIVE="/opt/victronenergy/dbus-systemcalc-py/ext/velib_python"
+VELIB_FALLBACK="/data/apps/dbus-serialbattery/ext/velib_python"
+if [[ ! -d "$VELIB_NATIVE" ]] && [[ ! -d "$VELIB_FALLBACK" ]]; then
+    warn "velib_python not found at ${VELIB_NATIVE} or ${VELIB_FALLBACK}."
+    warn "This is unusual — Venus OS v3.x should have velib_python at ${VELIB_NATIVE}."
+    warn "The driver may fail to start. Please verify your Venus OS installation."
 fi
 
 # ── 2. Create installation directory ───────────────────────────────────────
