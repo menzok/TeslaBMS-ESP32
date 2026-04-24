@@ -289,6 +289,17 @@ class VenusSettings:
         log.info(f"Setting '{setting}' changed: {old_value} → {new_value}")
         self._cache[setting] = new_value
 
+    def set(self, key: str, value: float) -> None:
+        """
+        Write a setting to localsettings so it persists across reboots.
+        Also updates the in-memory cache immediately so the new value
+        takes effect on the next publish cycle without waiting for the
+        SettingsDevice event-callback round-trip.
+        """
+        if self._sd is not None:
+            self._sd[key] = value   # persists to com.victronenergy.settings
+        self._cache[key] = value    # immediate in-memory effect
+
     # ─── Read accessors ───────────────────────────────────────────────────────
 
     @property
@@ -901,7 +912,7 @@ class TeslaBMSSerial:
 #  D-Bus service builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_dbus_service(bus) -> VeDbusService:
+def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
     svc = VeDbusService(DBUS_SERVICE_NAME, bus=bus, register=False)
 
     # ── Management / identity ─────────────────────────────────────────────────
@@ -1012,20 +1023,46 @@ def build_dbus_service(bus) -> VeDbusService:
     svc.add_path("/Config/OverCurrentThreshold", None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.1f}A")
 
-    # ── User settings mirror ──────────────────────────────────────────────────
-    svc.add_path("/Settings/MaxChargeCurrent",    None, writeable=False,
+    # ── User settings (writeable — GUI can change, changes persist to localsettings) ──
+    #
+    # Callback factory: validates the incoming value against the allowed range
+    # and, if valid, persists it to localsettings (com.victronenergy.settings)
+    # via VenusSettings.set().  Returning True lets VeDbusService update the
+    # stored value; returning False silently rejects out-of-range writes.
+    def _make_setting_cb(key: str, lo: float, hi: float):
+        def _cb(path: str, value) -> bool:
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                return False
+            if not (lo <= v <= hi):
+                log.warning(f"Setting {path} rejected: {value} outside [{lo}, {hi}]")
+                return False
+            vs.set(key, v)
+            log.info(f"Setting {path} accepted: {v} (persisted to localsettings)")
+            return True
+        return _cb
+
+    svc.add_path("/Settings/MaxChargeCurrent",    None, writeable=True,
+                 onchangecallback=_make_setting_cb("MaxChargeCurrent",    1.0,   CURRENT_HARD_CAP),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxDischargeCurrent", None, writeable=False,
+    svc.add_path("/Settings/MaxDischargeCurrent", None, writeable=True,
+                 onchangecallback=_make_setting_cb("MaxDischargeCurrent", 1.0,   CURRENT_HARD_CAP),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/AbsorptionVoltage",   None, writeable=False,
+    svc.add_path("/Settings/AbsorptionVoltage",   None, writeable=True,
+                 onchangecallback=_make_setting_cb("AbsorptionVoltage",   3.50,  4.25),
                  gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/FloatVoltage",        None, writeable=False,
+    svc.add_path("/Settings/FloatVoltage",        None, writeable=True,
+                 onchangecallback=_make_setting_cb("FloatVoltage",        3.20,  4.20),
                  gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/TailCurrent",         None, writeable=False,
+    svc.add_path("/Settings/TailCurrent",         None, writeable=True,
+                 onchangecallback=_make_setting_cb("TailCurrent",         0.5,   50.0),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxChargeTemp",       None, writeable=False,
+    svc.add_path("/Settings/MaxChargeTemp",       None, writeable=True,
+                 onchangecallback=_make_setting_cb("MaxChargeTemp",       20.0,  60.0),
                  gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Settings/MinChargeTemp",       None, writeable=False,
+    svc.add_path("/Settings/MinChargeTemp",       None, writeable=True,
+                 onchangecallback=_make_setting_cb("MinChargeTemp",       -10.0, 20.0),
                  gettextcallback=lambda p, v: f"{v:.1f}°C")
 
     # ── Commands ──────────────────────────────────────────────────────────────
@@ -1255,7 +1292,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
     svc["/Config/CapacityAh"]           = bms.capacity_ah
     svc["/Config/OverCurrentThreshold"] = round(bms.eep_overcurrent_thresh, 1)
 
-    # ── 11. User settings mirror ───────────────────────────────────────────────
+    # ── 11. User settings display — confirm persisted value each cycle ─────────
     svc["/Settings/MaxChargeCurrent"]    = vs.max_charge_current
     svc["/Settings/MaxDischargeCurrent"] = vs.max_discharge_current
     svc["/Settings/AbsorptionVoltage"]   = vs.absorption_voltage
@@ -1307,7 +1344,7 @@ def main() -> None:
     bms.start(shunt_monitor=shunt)
 
     # ── D-Bus service ─────────────────────────────────────────────────────────
-    svc = build_dbus_service(bus)
+    svc = build_dbus_service(bus, vs)
     log.info(f"D-Bus service '{DBUS_SERVICE_NAME}' registered.")
 
     GLib.timeout_add(PUBLISH_INTERVAL_MS, lambda: publish(bms, svc, vs))
