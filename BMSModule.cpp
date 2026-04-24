@@ -328,7 +328,7 @@ void BMSModule::balanceCells()
     }
 }
 
-uint8_t BMSModule::getBalancingState(int cell)
+uint8_t BMSModule::getBalancingState(int cell) const
 {
     if (cell < 0 || cell > 5) return 0;
     return balanceState[cell];

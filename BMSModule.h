@@ -30,7 +30,7 @@ public:
     bool isExisting() const;
     void setExists(bool ex);
     void balanceCells();
-    uint8_t getBalancingState(int cell);
+    uint8_t getBalancingState(int cell) const;
 
 private:
     float cellVolt[6];          // calculated as 16 bit value * 6.250 / 16383 = volts
