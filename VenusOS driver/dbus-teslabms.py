@@ -943,9 +943,11 @@ def build_dbus_service(bus, cfg: "BmsConfig") -> VeDbusService:
 
     # ── Legacy switch path (kept for Node-RED compatibility) ──────────────────
     # Write 1 = request STARTUP, write 0 = request SHUTDOWN.
-    # Initialized to 0 so the driver does NOT auto-close contactors on startup.
+    # Initialized to None (neutral) so the driver takes no action on startup.
+    # After the command is sent the path is cleared back to None (one-shot),
+    # preventing repeated serial writes that would block the GLib main loop.
     # The actual contactor state is always visible on /Contactor/State above.
-    svc.add_path("/Switch", 0, writeable=True)
+    svc.add_path("/Switch", None, writeable=True)
 
     svc.register()
     return svc
@@ -1094,17 +1096,19 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
         svc["/Control/Shutdown"] = 0
 
     # ── 1b. Legacy /Switch state-based control ────────────────────────────────
-    # Write 1 to request STARTUP, 0 to request SHUTDOWN.
-    # The driver only acts when the desired state differs from the actual
-    # contactor state — it does NOT overwrite /Switch with the actual state,
-    # so Node-RED writes persist across publish cycles.
+    # Write 1 to request STARTUP, write 0 to request SHUTDOWN.
+    # One-shot: the driver sends the command and immediately clears /Switch back
+    # to None so the command is not re-sent on every subsequent publish cycle.
+    # This prevents the GLib main loop from blocking on serial lock contention.
     switch = svc["/Switch"]
-    if switch == 0 and bms.contactor_state != 0:
-        log.info("D-Bus /Switch=0 → EXT_CMD_SHUTDOWN")
-        bms.send_command(EXT_CMD_SHUTDOWN)
-    elif switch == 1 and bms.contactor_state == 0:
+    if switch == 1:
         log.info("D-Bus /Switch=1 → EXT_CMD_STARTUP")
         bms.send_command(EXT_CMD_STARTUP)
+        svc["/Switch"] = None
+    elif switch == 0:
+        log.info("D-Bus /Switch=0 → EXT_CMD_SHUTDOWN")
+        bms.send_command(EXT_CMD_SHUTDOWN)
+        svc["/Switch"] = None
 
     # ── 2. Connection state ───────────────────────────────────────────────────
     online = not bms.is_stale
