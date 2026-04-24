@@ -112,6 +112,7 @@ DEFAULT_CHARGE_VOLTAGE_MARGIN = 0.05    # V per cell (CVL safety margin subtract
 DEFAULT_LOW_CELL_VOLTAGE      = 3.10    # V per cell (DCL taper onset as lowest cell approaches UV trip)
 DEFAULT_LOW_SOC_CUTOFF        = 5.0     # % (hard DCL floor — zero discharge below this SOC)
 DEFAULT_LOW_SOC_DERATE_START  = 15.0    # % (SOC at which DCL begins linearly tapering toward zero)
+DEFAULT_COMMS_LOSS_CVL        = 24.0    # V (pack CVL ceiling applied when BMS comms is lost — wide margin below full charge)
 
 # Timing
 SERIAL_TIMEOUT_S    = 3.5    # read timeout inside send_command — generous margin above ESP32 response latency
@@ -236,6 +237,7 @@ class VenusSettings:
             "LowCellVoltage":       DEFAULT_LOW_CELL_VOLTAGE,
             "LowSocCutoff":         DEFAULT_LOW_SOC_CUTOFF,
             "LowSocDerateStart":    DEFAULT_LOW_SOC_DERATE_START,
+            "CommsLossCvl":         DEFAULT_COMMS_LOSS_CVL,
         }
 
     def setup(self) -> None:
@@ -328,6 +330,15 @@ class VenusSettings:
                 5.0,    # %
                 50.0,   # %
             ],
+            # Fallback pack CVL applied when BMS comms is lost — chargers are
+            # capped at this voltage even though CCL is zeroed, preventing
+            # dangerous overcharge if a charger ever ignores the current limit
+            "CommsLossCvl": [
+                f"{self._BASE}/CommsLossCvl",
+                DEFAULT_COMMS_LOSS_CVL,
+                10.0,   # V — low enough to cover small packs
+                60.0,   # V — high enough for 16S packs (4.2 × 16 ≈ 67 V max)
+            ],
         }
         self._sd = SettingsDevice(
             bus=self._bus,
@@ -410,6 +421,10 @@ class VenusSettings:
     def low_soc_derate_start(self) -> float:
         return float(self._cache["LowSocDerateStart"])
 
+    @property
+    def comms_loss_cvl(self) -> float:
+        return float(self._cache["CommsLossCvl"])
+
     def reset_to_defaults(self) -> None:
         """
         Restore every user-configurable setting to its factory default and
@@ -428,6 +443,7 @@ class VenusSettings:
             "LowCellVoltage":      DEFAULT_LOW_CELL_VOLTAGE,
             "LowSocCutoff":        DEFAULT_LOW_SOC_CUTOFF,
             "LowSocDerateStart":   DEFAULT_LOW_SOC_DERATE_START,
+            "CommsLossCvl":        DEFAULT_COMMS_LOSS_CVL,
         }
         for key, value in defaults.items():
             self.set(key, value)
@@ -1189,6 +1205,9 @@ def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
     svc.add_path("/Settings/LowSocDerateStart",   vs.low_soc_derate_start, writeable=True,
                  onchangecallback=_make_setting_cb("LowSocDerateStart",   5.0,   50.0),
                  gettextcallback=lambda p, v: f"{v:.1f}%")
+    svc.add_path("/Settings/CommsLossCvl",        vs.comms_loss_cvl, writeable=True,
+                 onchangecallback=_make_setting_cb("CommsLossCvl",        10.0,  60.0),
+                 gettextcallback=lambda p, v: f"{v:.1f}V")
 
     # ── Reset to defaults trigger ──────────────────────────────────────────────
     # Write 1 to reset all /Settings/* to factory defaults.  The publish loop
@@ -1353,12 +1372,15 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
 
     if not online:
         svc["/State"] = 10   # error / comm fault
-        # ── Comms-loss safety: zero all charger/discharge limits so DVCC ──────
-        # stops driving the MPPT and inverter immediately.  Without this, the
-        # last published CVL/CCL/DCL values stay on D-Bus and the charger
-        # continues blindly at the stale limits.
-        log.warning("BMS offline — zeroing CVL/CCL/DCL to prevent blind charging/discharging")
-        svc["/Info/MaxChargeVoltage"]    = 0.0
+        # ── Comms-loss safety: cap CVL at the user-configured safety-net voltage ─
+        # and zero all current limits so DVCC stops active charging/discharging.
+        # CVL is set to comms_loss_cvl (default 24 V) rather than 0.0 so that
+        # chargers which ignore CCL=0 still cannot charge above a safe ceiling.
+        log.warning(
+            f"BMS offline — setting CVL to safety-net {vs.comms_loss_cvl:.1f}V "
+            "and zeroing CCL/DCL to prevent blind charging/discharging"
+        )
+        svc["/Info/MaxChargeVoltage"]    = vs.comms_loss_cvl
         svc["/Info/MaxChargeCurrent"]    = 0.0
         svc["/Info/MaxDischargeCurrent"] = 0.0
         svc["/Io/AllowToCharge"]                    = 0
@@ -1375,7 +1397,11 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
     # stale limits for up to OFFLINE_TIMEOUT seconds.
     if not bms.data_fresh:
         age = int(time.time() - bms.last_frame_time)
-        log.warning(f"BMS data stale ({age}s) — zeroing CCL/DCL to prevent blind charging/discharging")
+        log.warning(
+            f"BMS data stale ({age}s) — setting CVL to safety-net {vs.comms_loss_cvl:.1f}V "
+            "and zeroing CCL/DCL to prevent blind charging/discharging"
+        )
+        svc["/Info/MaxChargeVoltage"]    = vs.comms_loss_cvl
         svc["/Info/MaxChargeCurrent"]    = 0.0
         svc["/Info/MaxDischargeCurrent"] = 0.0
         svc["/Io/AllowToCharge"]                    = 0
