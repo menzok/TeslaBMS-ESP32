@@ -56,6 +56,11 @@
 #  /Settings/TeslaBMS/TailCurrent            default = 10A
 #  /Settings/TeslaBMS/MaxChargeTemp          default = 45°C
 #  /Settings/TeslaBMS/MinChargeTemp          default = 5°C
+#  /Settings/TeslaBMS/HighCellVoltage        default = 4.15V per cell (CCL taper onset)
+#  /Settings/TeslaBMS/ChargeVoltageMargin    default = 0.05V per cell (CVL safety margin below OV trip)
+#  /Settings/TeslaBMS/LowCellVoltage         default = 3.10V per cell (DCL taper onset)
+#  /Settings/TeslaBMS/LowSocCutoff           default = 5.0% (hard DCL SOC floor)
+#  /Settings/TeslaBMS/LowSocDerateStart      default = 15.0% (SOC at which DCL starts tapering)
 #
 #  D-Bus trigger paths (write 1 to activate, auto-clears to 0)
 #  ────────────────────────────────────────────────────────────
@@ -102,6 +107,11 @@ DEFAULT_FLOAT_VOLTAGE         = 4.10    # V per cell
 DEFAULT_TAIL_CURRENT          = 10.0    # A  (end-of-charge detection)
 DEFAULT_MAX_CHARGE_TEMP       = 45.0    # °C (charge inhibit above)
 DEFAULT_MIN_CHARGE_TEMP       = 5.0     # °C (charge inhibit below)
+DEFAULT_HIGH_CELL_VOLTAGE     = 4.15    # V per cell (CCL taper onset as highest cell approaches OV trip)
+DEFAULT_CHARGE_VOLTAGE_MARGIN = 0.05    # V per cell (CVL safety margin subtracted from eep_overvoltage)
+DEFAULT_LOW_CELL_VOLTAGE      = 3.10    # V per cell (DCL taper onset as lowest cell approaches UV trip)
+DEFAULT_LOW_SOC_CUTOFF        = 5.0     # % (hard DCL floor — zero discharge below this SOC)
+DEFAULT_LOW_SOC_DERATE_START  = 15.0    # % (SOC at which DCL begins linearly tapering toward zero)
 
 # Timing
 SERIAL_TIMEOUT_S    = 3.5    # read timeout inside send_command — generous margin above ESP32 response latency
@@ -221,6 +231,11 @@ class VenusSettings:
             "TailCurrent":          DEFAULT_TAIL_CURRENT,
             "MaxChargeTemp":        DEFAULT_MAX_CHARGE_TEMP,
             "MinChargeTemp":        DEFAULT_MIN_CHARGE_TEMP,
+            "HighCellVoltage":      DEFAULT_HIGH_CELL_VOLTAGE,
+            "ChargeVoltageMargin":  DEFAULT_CHARGE_VOLTAGE_MARGIN,
+            "LowCellVoltage":       DEFAULT_LOW_CELL_VOLTAGE,
+            "LowSocCutoff":         DEFAULT_LOW_SOC_CUTOFF,
+            "LowSocDerateStart":    DEFAULT_LOW_SOC_DERATE_START,
         }
 
     def setup(self) -> None:
@@ -271,6 +286,47 @@ class VenusSettings:
                 DEFAULT_MIN_CHARGE_TEMP,
                 -10.0,  # °C
                 20.0,   # °C
+            ],
+            # CCL taper onset — CCL linearly tapers to zero as highest cell
+            # climbs from HighCellVoltage up to eep_overvoltage (OV trip)
+            "HighCellVoltage": [
+                f"{self._BASE}/HighCellVoltage",
+                DEFAULT_HIGH_CELL_VOLTAGE,
+                3.50,   # V per cell
+                4.25,   # V per cell
+            ],
+            # CVL safety margin — always subtracted from eep_overvoltage when
+            # computing the safe cell ceiling, preventing CVL from reaching the
+            # hard OV trip voltage when cells are perfectly balanced
+            "ChargeVoltageMargin": [
+                f"{self._BASE}/ChargeVoltageMargin",
+                DEFAULT_CHARGE_VOLTAGE_MARGIN,
+                0.01,   # V per cell
+                0.20,   # V per cell
+            ],
+            # DCL taper onset — DCL linearly tapers to zero as lowest cell
+            # drops from LowCellVoltage down to eep_undervoltage (UV trip)
+            "LowCellVoltage": [
+                f"{self._BASE}/LowCellVoltage",
+                DEFAULT_LOW_CELL_VOLTAGE,
+                2.50,   # V per cell
+                3.50,   # V per cell
+            ],
+            # Hard DCL SOC floor — zero discharge below this SOC to prevent
+            # deep discharge even if cell voltages still look OK (resting bounce)
+            "LowSocCutoff": [
+                f"{self._BASE}/LowSocCutoff",
+                DEFAULT_LOW_SOC_CUTOFF,
+                0.0,    # %
+                20.0,   # %
+            ],
+            # SOC at which DCL begins linearly tapering toward zero (reaching
+            # zero at LowSocCutoff) — gives inverter time to react gracefully
+            "LowSocDerateStart": [
+                f"{self._BASE}/LowSocDerateStart",
+                DEFAULT_LOW_SOC_DERATE_START,
+                5.0,    # %
+                50.0,   # %
             ],
         }
         self._sd = SettingsDevice(
@@ -334,6 +390,26 @@ class VenusSettings:
     def min_charge_temp(self) -> float:
         return float(self._cache["MinChargeTemp"])
 
+    @property
+    def high_cell_voltage(self) -> float:
+        return float(self._cache["HighCellVoltage"])
+
+    @property
+    def charge_voltage_margin(self) -> float:
+        return float(self._cache["ChargeVoltageMargin"])
+
+    @property
+    def low_cell_voltage(self) -> float:
+        return float(self._cache["LowCellVoltage"])
+
+    @property
+    def low_soc_cutoff(self) -> float:
+        return float(self._cache["LowSocCutoff"])
+
+    @property
+    def low_soc_derate_start(self) -> float:
+        return float(self._cache["LowSocDerateStart"])
+
     def reset_to_defaults(self) -> None:
         """
         Restore every user-configurable setting to its factory default and
@@ -347,6 +423,11 @@ class VenusSettings:
             "TailCurrent":         DEFAULT_TAIL_CURRENT,
             "MaxChargeTemp":       DEFAULT_MAX_CHARGE_TEMP,
             "MinChargeTemp":       DEFAULT_MIN_CHARGE_TEMP,
+            "HighCellVoltage":     DEFAULT_HIGH_CELL_VOLTAGE,
+            "ChargeVoltageMargin": DEFAULT_CHARGE_VOLTAGE_MARGIN,
+            "LowCellVoltage":      DEFAULT_LOW_CELL_VOLTAGE,
+            "LowSocCutoff":        DEFAULT_LOW_SOC_CUTOFF,
+            "LowSocDerateStart":   DEFAULT_LOW_SOC_DERATE_START,
         }
         for key, value in defaults.items():
             self.set(key, value)
@@ -976,15 +1057,15 @@ def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
                  gettextcallback=lambda p, v: f"{v:.0f}Ah")
 
     # ── CVL / CCL / DCL ───────────────────────────────────────────────────────
-    svc.add_path("/Info/MaxChargeVoltage",    None, writeable=True,
+    svc.add_path("/Info/MaxChargeVoltage",    None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.2f}V")
-    svc.add_path("/Info/BatteryLowVoltage",   None, writeable=True)
-    svc.add_path("/Info/MaxChargeCurrent",    None, writeable=True,
+    svc.add_path("/Info/BatteryLowVoltage",   None, writeable=False)
+    svc.add_path("/Info/MaxChargeCurrent",    None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.2f}A")
-    svc.add_path("/Info/MaxDischargeCurrent", None, writeable=True,
+    svc.add_path("/Info/MaxDischargeCurrent", None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.2f}A")
-    svc.add_path("/Info/ChargeMode",          None, writeable=True)
-    svc.add_path("/Info/TailCurrent",         None, writeable=True,
+    svc.add_path("/Info/ChargeMode",          None, writeable=False)
+    svc.add_path("/Info/TailCurrent",         None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.1f}A")
 
     # ── System / cell data ────────────────────────────────────────────────────
@@ -1065,27 +1146,42 @@ def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
             return True
         return _cb
 
-    svc.add_path("/Settings/MaxChargeCurrent",    None, writeable=True,
+    svc.add_path("/Settings/MaxChargeCurrent",    vs.max_charge_current, writeable=True,
                  onchangecallback=_make_setting_cb("MaxChargeCurrent",    1.0,   CURRENT_HARD_CAP),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxDischargeCurrent", None, writeable=True,
+    svc.add_path("/Settings/MaxDischargeCurrent", vs.max_discharge_current, writeable=True,
                  onchangecallback=_make_setting_cb("MaxDischargeCurrent", 1.0,   CURRENT_HARD_CAP),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/AbsorptionVoltage",   None, writeable=True,
+    svc.add_path("/Settings/AbsorptionVoltage",   vs.absorption_voltage, writeable=True,
                  onchangecallback=_make_setting_cb("AbsorptionVoltage",   3.50,  4.25),
                  gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/FloatVoltage",        None, writeable=True,
+    svc.add_path("/Settings/FloatVoltage",        vs.float_voltage, writeable=True,
                  onchangecallback=_make_setting_cb("FloatVoltage",        3.20,  4.20),
                  gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/TailCurrent",         None, writeable=True,
+    svc.add_path("/Settings/TailCurrent",         vs.tail_current, writeable=True,
                  onchangecallback=_make_setting_cb("TailCurrent",         0.5,   50.0),
                  gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxChargeTemp",       None, writeable=True,
+    svc.add_path("/Settings/MaxChargeTemp",       vs.max_charge_temp, writeable=True,
                  onchangecallback=_make_setting_cb("MaxChargeTemp",       20.0,  60.0),
                  gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Settings/MinChargeTemp",       None, writeable=True,
+    svc.add_path("/Settings/MinChargeTemp",       vs.min_charge_temp, writeable=True,
                  onchangecallback=_make_setting_cb("MinChargeTemp",       -10.0, 20.0),
                  gettextcallback=lambda p, v: f"{v:.1f}°C")
+    svc.add_path("/Settings/HighCellVoltage",     vs.high_cell_voltage, writeable=True,
+                 onchangecallback=_make_setting_cb("HighCellVoltage",     3.50,  4.25),
+                 gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Settings/ChargeVoltageMargin", vs.charge_voltage_margin, writeable=True,
+                 onchangecallback=_make_setting_cb("ChargeVoltageMargin", 0.01,  0.20),
+                 gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Settings/LowCellVoltage",      vs.low_cell_voltage, writeable=True,
+                 onchangecallback=_make_setting_cb("LowCellVoltage",      2.50,  3.50),
+                 gettextcallback=lambda p, v: f"{v:.3f}V")
+    svc.add_path("/Settings/LowSocCutoff",        vs.low_soc_cutoff, writeable=True,
+                 onchangecallback=_make_setting_cb("LowSocCutoff",        0.0,   20.0),
+                 gettextcallback=lambda p, v: f"{v:.1f}%")
+    svc.add_path("/Settings/LowSocDerateStart",   vs.low_soc_derate_start, writeable=True,
+                 onchangecallback=_make_setting_cb("LowSocDerateStart",   5.0,   50.0),
+                 gettextcallback=lambda p, v: f"{v:.1f}%")
 
     # ── Reset to defaults trigger ──────────────────────────────────────────────
     # Write 1 to reset all /Settings/* to factory defaults.  The publish loop
@@ -1093,8 +1189,9 @@ def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
     svc.add_path("/Settings/ResetToDefaults", 0, writeable=True)
 
     # ── Commands ──────────────────────────────────────────────────────────────
-    svc.add_path("/Control/Shutdown", 0, writeable=True)
-    svc.add_path("/Control/Startup",  0, writeable=True)
+    # Standard Venus OS battery switch path — rendered as a toggle in Remote Console.
+    # 1 = contactors closed (on / startup), 0 = contactors open (off / shutdown).
+    svc.add_path("/Switch", 1, writeable=True)
 
     svc.register()
     return svc
@@ -1112,7 +1209,7 @@ def calc_dynamic_cvl(bms: TeslaBMSSerial, vs: VenusSettings) -> float:
     down so that no individual cell exceeds the EEPROM over-voltage setpoint.
 
       cell_spread  = highest_cell_v - avg_cell_v
-      safe_cell_v  = eep_overvoltage - cell_spread
+      safe_cell_v  = eep_overvoltage - cell_spread - charge_voltage_margin
       dynamic_cvl  = safe_cell_v × cell_count   (clamped to float … absorption)
 
     When cells are well-balanced cell_spread ≈ 0 and CVL approaches the full
@@ -1126,7 +1223,7 @@ def calc_dynamic_cvl(bms: TeslaBMSSerial, vs: VenusSettings) -> float:
     av = bms.avg_cell_volt   if bms.avg_cell_volt  > 0.0 else hi
 
     spread      = max(hi - av, 0.0)
-    safe_cell   = bms.eep_overvoltage - spread
+    safe_cell   = bms.eep_overvoltage - spread - vs.charge_voltage_margin   # margin keeps CVL below hard OV trip
     dynamic_cvl = round(safe_cell * cell_count, 2)
 
     absorption_pack = vs.pack_absorption_voltage(cell_count)
@@ -1141,41 +1238,75 @@ _DERATE_ZONE_C = 5.0   # °C below MaxChargeTemp / above MinChargeTemp
 
 
 def calc_ccl(bms: TeslaBMSSerial, vs: VenusSettings) -> float:
-    """Charge Current Limit with temperature derating."""
+    """Charge Current Limit with temperature and high cell voltage derating."""
     if not bms.charge_fet:
         return 0.0
 
     max_ccl = vs.effective_max_charge_current(bms.eep_overcurrent_thresh)
     t = bms.temperature   # average temp from ESP32
 
+    # ── 1. Temperature gate ───────────────────────────────────────────────────
     if t > vs.max_charge_temp or t < vs.min_charge_temp:
         return 0.0
 
-    # Taper near upper limit
+    # ── 2. High temperature taper ─────────────────────────────────────────────
     if t > vs.max_charge_temp - _DERATE_ZONE_C:
         factor = (vs.max_charge_temp - t) / _DERATE_ZONE_C
         max_ccl *= max(0.0, min(1.0, factor))
 
-    # Taper near lower limit
+    # ── 3. Low temperature taper ──────────────────────────────────────────────
     if t < vs.min_charge_temp + _DERATE_ZONE_C:
         factor = (t - vs.min_charge_temp) / _DERATE_ZONE_C
         max_ccl *= max(0.0, min(1.0, factor))
+
+    # ── 4. High cell voltage taper (highest cell approaching ESP32 OV trip) ───
+    # Tapers CCL linearly from full at HighCellVoltage down to zero at eep_overvoltage.
+    # Prevents the charger slamming full current into the hard OV trip threshold.
+    hi_cell = bms.highest_cell_v
+    if hi_cell > 0.0:   # 0.0 means not yet received — skip until first frame
+        if hi_cell >= bms.eep_overvoltage:
+            return 0.0
+        if hi_cell > vs.high_cell_voltage:
+            factor = (bms.eep_overvoltage - hi_cell) / max(bms.eep_overvoltage - vs.high_cell_voltage, 0.001)
+            max_ccl *= max(0.0, min(1.0, factor))
 
     return round(max_ccl, 1)
 
 
 def calc_dcl(bms: TeslaBMSSerial, vs: VenusSettings) -> float:
-    """Discharge Current Limit with low-temperature derating."""
+    """Discharge Current Limit with SOC, cell voltage, and temperature derating."""
     if not bms.discharge_fet:
         return 0.0
 
     max_dcl = vs.effective_max_discharge_current(bms.eep_overcurrent_thresh)
-    t = bms.min_temp   # use minimum module temp for conservative derating
 
-    if t < bms.eep_undertemp:
+    # ── 1. Hard SOC floor ─────────────────────────────────────────────────────
+    # Zero DCL entirely below LowSocCutoff to prevent deep discharge even if
+    # cell voltages still look OK (resting bounce effect).
+    if bms.soc <= vs.low_soc_cutoff:
         return 0.0
 
-    # Taper in the 5 °C band above the under-temp setpoint
+    # ── 2. SOC taper ──────────────────────────────────────────────────────────
+    # Linear ramp from full DCL at LowSocDerateStart down to zero at LowSocCutoff.
+    # Gives the inverter time to react gracefully rather than a sudden cutoff.
+    if bms.soc < vs.low_soc_derate_start:
+        factor = (bms.soc - vs.low_soc_cutoff) / max(vs.low_soc_derate_start - vs.low_soc_cutoff, 1.0)
+        max_dcl *= max(0.0, min(1.0, factor))
+
+    # ── 3. Cell voltage taper (lowest cell approaching ESP32 UV hard trip) ────
+    # Tapers DCL linearly from full at LowCellVoltage down to zero at eep_undervoltage.
+    lo_cell = bms.lowest_cell_v
+    if lo_cell > 0.0:   # 0.0 means not yet received — skip until first frame
+        if lo_cell <= bms.eep_undervoltage:
+            return 0.0
+        if lo_cell < vs.low_cell_voltage:
+            factor = (lo_cell - bms.eep_undervoltage) / max(vs.low_cell_voltage - bms.eep_undervoltage, 0.001)
+            max_dcl *= max(0.0, min(1.0, factor))
+
+    # ── 4. Low temperature taper ──────────────────────────────────────────────
+    t = bms.min_temp   # use minimum module temp for conservative derating
+    if t < bms.eep_undertemp:
+        return 0.0
     if t < bms.eep_undertemp + _DERATE_ZONE_C:
         factor = (t - bms.eep_undertemp) / _DERATE_ZONE_C
         max_dcl *= max(0.0, min(1.0, factor))
@@ -1193,15 +1324,13 @@ _history = {"min_v": None, "max_v": None, "min_t": None, "max_t": None}
 def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
 
     # ── 1. Commands ───────────────────────────────────────────────────────────
-    if svc["/Control/Shutdown"] == 1:
-        log.info("D-Bus → SHUTDOWN")
+    switch = svc["/Switch"]
+    if switch == 0 and bms.contactor_state != 0:   # user wants OFF, contactors currently on
+        log.info("D-Bus /Switch → SHUTDOWN")
         bms.send_command(EXT_CMD_SHUTDOWN)
-        svc["/Control/Shutdown"] = 0
-
-    if svc["/Control/Startup"] == 1:
-        log.info("D-Bus → STARTUP")
+    elif switch == 1 and bms.contactor_state == 0: # user wants ON, contactors currently off
+        log.info("D-Bus /Switch → STARTUP")
         bms.send_command(EXT_CMD_STARTUP)
-        svc["/Control/Startup"] = 0
 
     if svc["/Settings/ResetToDefaults"] == 1:
         log.info("D-Bus → RESET TO DEFAULTS")
@@ -1224,6 +1353,10 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
     svc["/Dc/0/Voltage"]     = round(bms.voltage,     2)
     svc["/Dc/0/Power"]       = round(bms.power,       0)
     svc["/Dc/0/Temperature"] = round(bms.temperature, 1)
+
+    # Reflect actual contactor state back to /Switch so GUI stays in sync
+    # with hardware state (overrides any stale user-written value)
+    svc["/Switch"] = 0 if bms.contactor_state == 0 else 1
 
     # Item 4: only publish current when the ESP32 has an internal current sensor.
     # Without one, publishing 0 A would overwrite the SmartShunt reading in DVCC.
@@ -1332,6 +1465,11 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
     svc["/Settings/TailCurrent"]         = vs.tail_current
     svc["/Settings/MaxChargeTemp"]       = vs.max_charge_temp
     svc["/Settings/MinChargeTemp"]       = vs.min_charge_temp
+    svc["/Settings/HighCellVoltage"]     = vs.high_cell_voltage
+    svc["/Settings/ChargeVoltageMargin"] = vs.charge_voltage_margin
+    svc["/Settings/LowCellVoltage"]      = vs.low_cell_voltage
+    svc["/Settings/LowSocCutoff"]        = vs.low_soc_cutoff
+    svc["/Settings/LowSocDerateStart"]   = vs.low_soc_derate_start
 
     # ── 12. History ───────────────────────────────────────────────────────────
     if _history["min_v"] is None or bms.voltage  < _history["min_v"]: _history["min_v"] = bms.voltage
