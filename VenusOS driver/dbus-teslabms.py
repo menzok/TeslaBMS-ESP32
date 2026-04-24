@@ -83,9 +83,16 @@ from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import dbus
 
-# ── velib_python ──────────────────────────────────────────────────────────────
-VELIB_PATH = "/data/apps/dbus-serialbattery/ext/velib_python"
-sys.path.insert(1, VELIB_PATH)
+# ── velib_python — use native Venus OS library (no external dependencies required) ──
+_VELIB_PATHS = [
+    "/opt/victronenergy/dbus-systemcalc-py/ext/velib_python",   # native Venus OS v3.x (preferred)
+    "/opt/victronenergy/dbus-battery/ext/velib_python",          # venus-os-large variant
+    "/data/apps/dbus-serialbattery/ext/velib_python",            # legacy fallback only
+]
+for _p in _VELIB_PATHS:
+    if os.path.isdir(_p):
+        sys.path.insert(1, _p)
+        break
 from vedbus import VeDbusService           # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
 
@@ -1149,66 +1156,6 @@ def build_dbus_service(bus, vs: "VenusSettings") -> VeDbusService:
     svc.add_path("/Config/OverCurrentThreshold", None, writeable=False,
                  gettextcallback=lambda p, v: f"{v:.1f}A")
 
-    # ── User settings (writeable — GUI can change, changes persist to localsettings) ──
-    #
-    # Callback factory: validates the incoming value against the allowed range
-    # and, if valid, persists it to localsettings (com.victronenergy.settings)
-    # via VenusSettings.set().  Returning True lets VeDbusService update the
-    # stored value; returning False silently rejects out-of-range writes.
-    def _make_setting_cb(key: str, lo: float, hi: float):
-        def _cb(path: str, value) -> bool:
-            try:
-                v = float(value)
-            except (TypeError, ValueError):
-                return False
-            if not (lo <= v <= hi):
-                log.warning(f"Setting {path} rejected: {value} outside [{lo}, {hi}]")
-                return False
-            vs.set(key, v)
-            log.info(f"Setting {path} accepted: {v} (persisted to localsettings)")
-            return True
-        return _cb
-
-    svc.add_path("/Settings/MaxChargeCurrent",    vs.max_charge_current, writeable=True,
-                 onchangecallback=_make_setting_cb("MaxChargeCurrent",    1.0,   CURRENT_HARD_CAP),
-                 gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxDischargeCurrent", vs.max_discharge_current, writeable=True,
-                 onchangecallback=_make_setting_cb("MaxDischargeCurrent", 1.0,   CURRENT_HARD_CAP),
-                 gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/AbsorptionVoltage",   vs.absorption_voltage, writeable=True,
-                 onchangecallback=_make_setting_cb("AbsorptionVoltage",   3.50,  4.25),
-                 gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/FloatVoltage",        vs.float_voltage, writeable=True,
-                 onchangecallback=_make_setting_cb("FloatVoltage",        3.20,  4.20),
-                 gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/TailCurrent",         vs.tail_current, writeable=True,
-                 onchangecallback=_make_setting_cb("TailCurrent",         0.5,   50.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}A")
-    svc.add_path("/Settings/MaxChargeTemp",       vs.max_charge_temp, writeable=True,
-                 onchangecallback=_make_setting_cb("MaxChargeTemp",       20.0,  60.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Settings/MinChargeTemp",       vs.min_charge_temp, writeable=True,
-                 onchangecallback=_make_setting_cb("MinChargeTemp",       -10.0, 20.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}°C")
-    svc.add_path("/Settings/HighCellVoltage",     vs.high_cell_voltage, writeable=True,
-                 onchangecallback=_make_setting_cb("HighCellVoltage",     3.50,  4.25),
-                 gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/ChargeVoltageMargin", vs.charge_voltage_margin, writeable=True,
-                 onchangecallback=_make_setting_cb("ChargeVoltageMargin", 0.01,  0.20),
-                 gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/LowCellVoltage",      vs.low_cell_voltage, writeable=True,
-                 onchangecallback=_make_setting_cb("LowCellVoltage",      2.50,  3.50),
-                 gettextcallback=lambda p, v: f"{v:.3f}V")
-    svc.add_path("/Settings/LowSocCutoff",        vs.low_soc_cutoff, writeable=True,
-                 onchangecallback=_make_setting_cb("LowSocCutoff",        0.0,   20.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}%")
-    svc.add_path("/Settings/LowSocDerateStart",   vs.low_soc_derate_start, writeable=True,
-                 onchangecallback=_make_setting_cb("LowSocDerateStart",   5.0,   50.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}%")
-    svc.add_path("/Settings/CommsLossCvl",        vs.comms_loss_cvl, writeable=True,
-                 onchangecallback=_make_setting_cb("CommsLossCvl",        10.0,  60.0),
-                 gettextcallback=lambda p, v: f"{v:.1f}V")
-
     # ── Reset to defaults trigger ──────────────────────────────────────────────
     # Write 1 to reset all /Settings/* to factory defaults.  The publish loop
     # detects the value, calls vs.reset_to_defaults(), and clears it to 0.
@@ -1519,20 +1466,6 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, vs: VenusSettings) -> bool:
     svc["/Config/CellCount"]            = bms.cell_count
     svc["/Config/CapacityAh"]           = bms.capacity_ah
     svc["/Config/OverCurrentThreshold"] = round(bms.eep_overcurrent_thresh, 1)
-
-    # ── 11. User settings display — confirm persisted value each cycle ─────────
-    svc["/Settings/MaxChargeCurrent"]    = vs.max_charge_current
-    svc["/Settings/MaxDischargeCurrent"] = vs.max_discharge_current
-    svc["/Settings/AbsorptionVoltage"]   = vs.absorption_voltage
-    svc["/Settings/FloatVoltage"]        = vs.float_voltage
-    svc["/Settings/TailCurrent"]         = vs.tail_current
-    svc["/Settings/MaxChargeTemp"]       = vs.max_charge_temp
-    svc["/Settings/MinChargeTemp"]       = vs.min_charge_temp
-    svc["/Settings/HighCellVoltage"]     = vs.high_cell_voltage
-    svc["/Settings/ChargeVoltageMargin"] = vs.charge_voltage_margin
-    svc["/Settings/LowCellVoltage"]      = vs.low_cell_voltage
-    svc["/Settings/LowSocCutoff"]        = vs.low_soc_cutoff
-    svc["/Settings/LowSocDerateStart"]   = vs.low_soc_derate_start
 
     # ── 12. History ───────────────────────────────────────────────────────────
     if _history["min_v"] is None or bms.voltage  < _history["min_v"]: _history["min_v"] = bms.voltage
