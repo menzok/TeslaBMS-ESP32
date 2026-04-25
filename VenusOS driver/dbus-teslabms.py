@@ -65,13 +65,19 @@
 #  /Control/Startup   — closes contactors (EXT_CMD_STARTUP)
 #  /Control/Shutdown  — opens contactors  (EXT_CMD_SHUTDOWN)
 #
-#  Contactor status (read-only)
-#  ────────────────────────────
-#  /Contactor/State   — raw contactor state from ESP32 (0 = open)
+#  Legacy switch path (write 0 or 1 to activate, auto-clears to None)
+#  ────────────────────────────────────────────────────────────────────
+#  /Switch  — write 1 = STARTUP, write 0 = SHUTDOWN; clears to None after sent
+#
+#  Contactor status (read-only, updated every publish cycle in all states)
+#  ────────────────────────────────────────────────────────────────────────
+#  /Contactor/State     — raw integer:  0=Open  1=Precharging  2=Connected  3=Fault
+#  /Contactor/StateName — human string: "Open" | "Precharging" | "Connected" | "Fault"
 #
 #  Example command-line usage:
 #    dbus -y com.victronenergy.battery.teslabms /Control/Startup  SetValue %1
 #    dbus -y com.victronenergy.battery.teslabms /Control/Shutdown SetValue %1
+#    dbus -y com.victronenergy.battery.teslabms /Contactor/StateName GetValue
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -172,6 +178,22 @@ OVERLORD_NORMAL   = 0
 OVERLORD_FAULT    = 1
 OVERLORD_STORAGE  = 2
 OVERLORD_SHUTDOWN = 3   # clean shutdown — distinct from fault
+
+# contactorState encoding (payload[13]) — mirrors ContactorController.h ContactorState enum
+CONTACTOR_OPEN        = 0
+CONTACTOR_PRECHARGING = 1
+CONTACTOR_CONNECTED   = 2
+CONTACTOR_FAULT       = 3
+
+_CONTACTOR_STATE_NAMES = {
+    CONTACTOR_OPEN:        "Open",
+    CONTACTOR_PRECHARGING: "Precharging",
+    CONTACTOR_CONNECTED:   "Connected",
+    CONTACTOR_FAULT:       "Fault",
+}
+
+def contactor_state_name(state: int) -> str:
+    return _CONTACTOR_STATE_NAMES.get(state, f"Unknown({state})")
 
 # statusFlags bits (payload[24])
 STATUS_CURRENT_SENSOR = (1 << 0)
@@ -929,9 +951,13 @@ def build_dbus_service(bus, cfg: "BmsConfig") -> VeDbusService:
                  gettextcallback=lambda p, v: f"{v:.1f}A")
 
     # ── Contactor status (read-only) ──────────────────────────────────────────
-    # Reflects the raw contactor state reported by the ESP32 each poll cycle.
-    # Readable via dbus or Node-RED; also visible on the battery page.
-    svc.add_path("/Contactor/State", 0, writeable=False)
+    # Reflects the contactor state reported by the ESP32 each poll cycle.
+    # /Contactor/State  — raw integer: 0=Open 1=Precharging 2=Connected 3=Fault
+    # /Contactor/StateName — human-readable string for Node-RED display / logic
+    # Both paths are updated in every publish cycle (online, stale, and offline)
+    # so Node-RED always receives the most-current known value.
+    svc.add_path("/Contactor/State",     0,      writeable=False)
+    svc.add_path("/Contactor/StateName", "Open", writeable=False)
 
     # ── Contactor control triggers (write 1 to activate, auto-clears to 0) ──
     # Use from command line:
@@ -943,9 +969,11 @@ def build_dbus_service(bus, cfg: "BmsConfig") -> VeDbusService:
 
     # ── Legacy switch path (kept for Node-RED compatibility) ──────────────────
     # Write 1 = request STARTUP, write 0 = request SHUTDOWN.
-    # Initialized to 0 so the driver does NOT auto-close contactors on startup.
+    # Initialized to None (neutral) so the driver takes no action on startup.
+    # After the command is sent the path is cleared back to None (one-shot),
+    # preventing repeated serial writes that would block the GLib main loop.
     # The actual contactor state is always visible on /Contactor/State above.
-    svc.add_path("/Switch", 0, writeable=True)
+    svc.add_path("/Switch", None, writeable=True)
 
     svc.register()
     return svc
@@ -1094,17 +1122,19 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
         svc["/Control/Shutdown"] = 0
 
     # ── 1b. Legacy /Switch state-based control ────────────────────────────────
-    # Write 1 to request STARTUP, 0 to request SHUTDOWN.
-    # The driver only acts when the desired state differs from the actual
-    # contactor state — it does NOT overwrite /Switch with the actual state,
-    # so Node-RED writes persist across publish cycles.
+    # Write 1 to request STARTUP, write 0 to request SHUTDOWN.
+    # One-shot: the driver sends the command and immediately clears /Switch back
+    # to None so the command is not re-sent on every subsequent publish cycle.
+    # This prevents the GLib main loop from blocking on serial lock contention.
     switch = svc["/Switch"]
-    if switch == 0 and bms.contactor_state != 0:
-        log.info("D-Bus /Switch=0 → EXT_CMD_SHUTDOWN")
-        bms.send_command(EXT_CMD_SHUTDOWN)
-    elif switch == 1 and bms.contactor_state == 0:
+    if switch == 1:
         log.info("D-Bus /Switch=1 → EXT_CMD_STARTUP")
         bms.send_command(EXT_CMD_STARTUP)
+        svc["/Switch"] = None
+    elif switch == 0:
+        log.info("D-Bus /Switch=0 → EXT_CMD_SHUTDOWN")
+        bms.send_command(EXT_CMD_SHUTDOWN)
+        svc["/Switch"] = None
 
     # ── 2. Connection state ───────────────────────────────────────────────────
     online = not bms.is_stale
@@ -1131,6 +1161,10 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
         svc["/Io/AllowToBalance"]                   = 0
         svc["/System/NrOfModulesBlockingCharge"]    = 1
         svc["/System/NrOfModulesBlockingDischarge"] = 1
+        # Keep contactor paths updated with last-known value so Node-RED
+        # always reads a current value; /Connected=0 signals staleness.
+        svc["/Contactor/State"]     = bms.contactor_state
+        svc["/Contactor/StateName"] = contactor_state_name(bms.contactor_state)
         return True
 
     # ── 2b. Stale data guard ──────────────────────────────────────────────────
@@ -1152,6 +1186,10 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
         svc["/Io/AllowToBalance"]                   = 0
         svc["/System/NrOfModulesBlockingCharge"]    = 1
         svc["/System/NrOfModulesBlockingDischarge"] = 1
+        # Keep contactor paths updated with last-known value so Node-RED
+        # always reads a current value; /Connected=1 but age visible in logs.
+        svc["/Contactor/State"]     = bms.contactor_state
+        svc["/Contactor/StateName"] = contactor_state_name(bms.contactor_state)
         return True
 
     # ── 3. Core telemetry ─────────────────────────────────────────────────────
@@ -1160,10 +1198,11 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
     svc["/Dc/0/Power"]       = round(bms.power,       0)
     svc["/Dc/0/Temperature"] = round(bms.temperature, 1)
 
-    # Update actual contactor state on the read-only status path.
+    # Update actual contactor state on the read-only status paths.
     # /Switch is intentionally NOT overwritten here — doing so would stomp
     # any value written by Node-RED or dbus commands.
-    svc["/Contactor/State"] = bms.contactor_state
+    svc["/Contactor/State"]     = bms.contactor_state
+    svc["/Contactor/StateName"] = contactor_state_name(bms.contactor_state)
 
     # Item 4: only publish current when the ESP32 has an internal current sensor.
     # Without one, publishing 0 A would overwrite the SmartShunt reading in DVCC.
