@@ -136,7 +136,7 @@ CHARGE_VOLTAGE_MARGIN = 0.05    # V per cell (CVL safety margin subtracted from 
 LOW_CELL_VOLTAGE      = 3.10    # V per cell (DCL taper onset as lowest cell approaches UV trip)
 LOW_SOC_CUTOFF        = 5.0     # % (hard DCL floor — zero discharge below this SOC)
 LOW_SOC_DERATE_START  = 15.0    # % (SOC at which DCL begins linearly tapering toward zero)
-COMMS_LOSS_CVL        = 24.0    # V (pack CVL ceiling applied when BMS comms is lost)
+COMMS_LOSS_CVL_PER_CELL = 4.0   # V/cell — safety CVL ceiling when BMS comms is lost; pack value = this × cell_count
 
 # Timing
 SERIAL_TIMEOUT_S    = 3.5    # read timeout inside send_command — generous margin above ESP32 response latency
@@ -266,7 +266,7 @@ class BmsConfig:
     low_cell_voltage      = float(LOW_CELL_VOLTAGE)
     low_soc_cutoff        = float(LOW_SOC_CUTOFF)
     low_soc_derate_start  = float(LOW_SOC_DERATE_START)
-    comms_loss_cvl        = float(COMMS_LOSS_CVL)
+    comms_loss_cvl_per_cell = float(COMMS_LOSS_CVL_PER_CELL)
 
     def effective_max_charge_current(self, overcurrent_threshold: float) -> float:
         return min(self.max_charge_current, overcurrent_threshold)
@@ -1009,6 +1009,14 @@ def calc_dynamic_cvl(bms: TeslaBMSSerial, cfg: BmsConfig) -> float:
     """
     cell_count = max(bms.cell_count, 1)
 
+    float_pack      = cfg.pack_float_voltage(cell_count)
+    absorption_pack = cfg.pack_absorption_voltage(cell_count)
+
+    # In storage mode the BMS wants to hold a lower SOC.  Target float voltage
+    # so chargers do not push to the full absorption ceiling.
+    if bms.overlord_state == OVERLORD_STORAGE:
+        return float_pack
+
     # Fall back to avg if per-cell data not yet received
     hi = bms.highest_cell_v if bms.highest_cell_v > 0.0 else bms.avg_cell_volt
     av = bms.avg_cell_volt   if bms.avg_cell_volt  > 0.0 else hi
@@ -1016,9 +1024,6 @@ def calc_dynamic_cvl(bms: TeslaBMSSerial, cfg: BmsConfig) -> float:
     spread      = max(hi - av, 0.0)
     safe_cell   = bms.eep_overvoltage - spread - cfg.charge_voltage_margin   # margin keeps CVL below hard OV trip
     dynamic_cvl = round(safe_cell * cell_count, 2)
-
-    absorption_pack = cfg.pack_absorption_voltage(cell_count)
-    float_pack      = cfg.pack_float_voltage(cell_count)
 
     return max(float_pack, min(absorption_pack, dynamic_cvl))
 
@@ -1154,15 +1159,16 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
 
     if not online:
         svc["/State"] = 10   # error / comm fault
-        # ── Comms-loss safety: cap CVL at the safety-net voltage ──────────────
+        # ── Comms-loss safety: cap CVL at the per-cell safety voltage × cell_count ─
         # and zero all current limits so DVCC stops active charging/discharging.
-        # CVL is set to COMMS_LOSS_CVL rather than 0.0 so that chargers which
-        # ignore CCL=0 still cannot charge above a safe ceiling.
+        # CVL is set to a non-zero safety ceiling so that chargers which ignore
+        # CCL=0 still cannot charge above a safe pack voltage.
+        safety_cvl = round(cfg.comms_loss_cvl_per_cell * max(bms.cell_count, 1), 2)
         log.warning(
-            f"BMS offline — setting CVL to safety-net {cfg.comms_loss_cvl:.1f}V "
+            f"BMS offline — setting CVL to safety-net {safety_cvl:.1f}V "
             "and zeroing CCL/DCL to prevent blind charging/discharging"
         )
-        svc["/Info/MaxChargeVoltage"]    = cfg.comms_loss_cvl
+        svc["/Info/MaxChargeVoltage"]    = safety_cvl
         svc["/Info/MaxChargeCurrent"]    = 0.0
         svc["/Info/MaxDischargeCurrent"] = 0.0
         svc["/Io/AllowToCharge"]                    = 0
@@ -1183,11 +1189,12 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
     # stale limits for up to OFFLINE_TIMEOUT seconds.
     if not bms.data_fresh:
         age = int(time.time() - bms.last_frame_time)
+        safety_cvl = round(cfg.comms_loss_cvl_per_cell * max(bms.cell_count, 1), 2)
         log.warning(
-            f"BMS data stale ({age}s) — setting CVL to safety-net {cfg.comms_loss_cvl:.1f}V "
+            f"BMS data stale ({age}s) — setting CVL to safety-net {safety_cvl:.1f}V "
             "and zeroing CCL/DCL to prevent blind charging/discharging"
         )
-        svc["/Info/MaxChargeVoltage"]    = cfg.comms_loss_cvl
+        svc["/Info/MaxChargeVoltage"]    = safety_cvl
         svc["/Info/MaxChargeCurrent"]    = 0.0
         svc["/Info/MaxDischargeCurrent"] = 0.0
         svc["/Io/AllowToCharge"]                    = 0
