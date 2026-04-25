@@ -112,7 +112,15 @@ from vedbus import VeDbusService           # noqa: E402
 #  Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-AH_PER_MODULE = 232.0   # Ah per Tesla module (6S 74P, 232 Ah)
+AH_PER_MODULE    = 232.0   # Ah per Tesla module (6S 74P, 232 Ah)
+CELLS_PER_MODULE = 6       # Tesla module is 6S — 6 cells in series per module
+
+# ── Current sensor ────────────────────────────────────────────────────────────
+# Set to True  if a current sensor is wired to the ESP32.
+# Set to False if no current sensor is present (e.g. using a SmartShunt only).
+# When False, /Dc/0/Current is NOT published so the SmartShunt reading on
+# D-Bus is used by DVCC instead of being overwritten with a zero/stale value.
+HAS_CURRENT_SENSOR = True
 
 # ── Charge / discharge limits — hard-coded for this installation ──────────────
 # These are the values used at runtime.  To change them, edit here and redeploy.
@@ -132,7 +140,7 @@ COMMS_LOSS_CVL        = 24.0    # V (pack CVL ceiling applied when BMS comms is 
 
 # Timing
 SERIAL_TIMEOUT_S    = 3.5    # read timeout inside send_command — generous margin above ESP32 response latency
-PROBE_TIMEOUT_S     = 1.0    # per-port read timeout used only during port discovery (ESP32 responds in <10 ms)
+PROBE_TIMEOUT_S     = 3.5    # per-port read timeout used only during port discovery — match SERIAL_TIMEOUT_S to avoid spurious probe failures on a slow or booting ESP32
 POLL_INTERVAL_S     = 2.0    # how often Pi sends CMD 0x03 to request data
 CMD_RETRIES         = 3      # number of attempts before declaring a command failed
 CMD_RETRY_DELAY_S   = 1.0    # pause between retries — lets the ESP32 drain any converter noise before the next command arrives
@@ -389,7 +397,7 @@ class TeslaBMSSerial:
         self.eep_overcurrent_thresh = 350.0   # A — from EEPROM OVERCURRENT_THRESHOLD_A
 
         # ── Derived ───────────────────────────────────────────────────────────
-        self.cell_count  = 6
+        self.cell_count  = CELLS_PER_MODULE   # 1 module = 6 series cells; updated after first frame
         self.capacity_ah = 232.0
 
         # ── Connection ────────────────────────────────────────────────────────
@@ -751,10 +759,11 @@ class TeslaBMSSerial:
             self.max_temp       = float(max_t)
 
             # ── Derived topology ───────────────────────────────────────────
-            self.cell_count  = self.eep_num_modules // self.eep_num_strings
-            self.capacity_ah = round(
-                (self.eep_num_modules / self.eep_num_strings) * AH_PER_MODULE, 1
-            )
+            # Each Tesla module is 6S — multiply modules-per-string by CELLS_PER_MODULE
+            # to get the number of series cells used for CVL/CCL/DCL calculations.
+            modules_per_string = max(self.eep_num_modules // self.eep_num_strings, 1)
+            self.cell_count  = modules_per_string * CELLS_PER_MODULE
+            self.capacity_ah = round(modules_per_string * AH_PER_MODULE, 1)
 
             self.last_frame_time = time.time()
             self.frame_count    += 1
@@ -1204,9 +1213,10 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig) -> bool:
     svc["/Contactor/State"]     = bms.contactor_state
     svc["/Contactor/StateName"] = contactor_state_name(bms.contactor_state)
 
-    # Item 4: only publish current when the ESP32 has an internal current sensor.
-    # Without one, publishing 0 A would overwrite the SmartShunt reading in DVCC.
-    if bms.current_sensor_present:
+    # Only publish /Dc/0/Current when HAS_CURRENT_SENSOR is True (hard-coded
+    # setting at the top of this file).  When False the path is left as None
+    # so DVCC picks up the SmartShunt current instead of being overwritten.
+    if HAS_CURRENT_SENSOR:
         svc["/Dc/0/Current"] = round(bms.current, 2)
     else:
         svc["/Dc/0/Current"] = None
