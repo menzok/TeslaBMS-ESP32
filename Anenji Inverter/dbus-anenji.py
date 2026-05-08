@@ -75,6 +75,7 @@ from vedbus import VeDbusService  # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
 
 VERSION = "1.0.0"
+# Staged, locally unique product id used for this non-official Venus OS driver.
 PRODUCT_ID = 0xA3E1
 PRODUCT_NAME = "ANENJI ANJ-3KW-24V-LV-WIFI"
 FIRMWARE_VERSION = VERSION
@@ -204,6 +205,7 @@ LOG_PATH_CANDIDATES = [
     "/data/etc/dbus-anenji/dbus-anenji.log",
     "/tmp/dbus-anenji.log",
 ]
+LOG_MAX_BYTES = 512_000
 
 ALARM_OK = 0
 ALARM_WARNING = 1
@@ -234,7 +236,7 @@ def setup_logging() -> logging.Logger:
         try:
             if directory:
                 os.makedirs(directory, exist_ok=True)
-            file_handler = RotatingFileHandler(candidate, maxBytes=512_000, backupCount=4)
+            file_handler = RotatingFileHandler(candidate, maxBytes=LOG_MAX_BYTES, backupCount=4)
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
             logger.info("Logging to %s", candidate)
@@ -429,6 +431,16 @@ class PendingWrite:
     register: int
     values: List[int]
     reason: str
+
+
+class SettingsCallbackDispatcher:
+    def __init__(self) -> None:
+        self.target: Optional[Callable[..., bool]] = None
+
+    def __call__(self, *args: Any) -> bool:
+        if self.target is None:
+            return True
+        return bool(self.target(*args))
 
 
 class DbusValueReader:
@@ -1335,13 +1347,11 @@ def main() -> None:
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus() if "DBUS_SESSION_BUS_ADDRESS" in os.environ else dbus.SystemBus()
 
-    placeholder_callback = lambda *args, **kwargs: True
-    settings_device = build_localsettings(bus, placeholder_callback)
+    settings_callback = SettingsCallbackDispatcher()
+    settings_device = build_localsettings(bus, settings_callback)
     client = AnenjiModbusClient(configured_address=int(settings_device["ModbusAddress"]))
     controller = ServiceController(bus, client, settings_device)
-
-    # Replace the SettingsDevice callback target now that the controller exists.
-    settings_device._eventCallback = controller._handle_local_setting_change  # type: ignore[attr-defined]
+    settings_callback.target = controller._handle_local_setting_change
 
     client.start()
     GLib.timeout_add(PUBLISH_INTERVAL_MS, controller.publish)
