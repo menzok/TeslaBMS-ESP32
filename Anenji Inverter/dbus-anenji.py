@@ -259,7 +259,7 @@ def crc16_modbus(data: bytes) -> int:
     return crc & 0xFFFF
 
 
-def signed16(value: int) -> int:
+def to_signed16(value: int) -> int:
     return value - 0x10000 if value & 0x8000 else value
 
 
@@ -886,34 +886,34 @@ class AnenjiModbusClient:
         regs = self._transact_read(REALTIME_START, REALTIME_COUNT, "realtime")
         data = self.data
         data.working_mode = regs[0]
-        data.grid_voltage = signed16(regs[1]) / 10.0
-        data.grid_frequency = signed16(regs[2]) / 100.0
-        data.grid_power = signed16(regs[3])
-        data.inverter_voltage = signed16(regs[4]) / 10.0
-        data.inverter_current = signed16(regs[5]) / 10.0
-        data.inverter_frequency = signed16(regs[6]) / 100.0
-        data.inverter_power = signed16(regs[7])
-        data.inverter_charge_power = signed16(regs[8])
-        data.output_voltage = signed16(regs[9]) / 10.0
-        data.output_current = signed16(regs[10]) / 10.0
-        data.output_frequency = signed16(regs[11]) / 100.0
-        data.output_power = signed16(regs[12])
-        data.output_apparent_power = signed16(regs[13])
-        data.battery_voltage = signed16(regs[14]) / 10.0
-        data.battery_current = signed16(regs[15]) / 10.0
-        data.battery_power = signed16(regs[16])
-        data.pv_voltage = signed16(regs[18]) / 10.0
-        data.pv_current = signed16(regs[19]) / 10.0
-        data.pv_power = signed16(regs[22])
-        data.pv_charge_power = signed16(regs[23])
-        data.load_percent = signed16(regs[24])
-        data.dcdc_temp = signed16(regs[25])
-        data.inverter_temp = signed16(regs[26])
+        data.grid_voltage = to_signed16(regs[1]) / 10.0
+        data.grid_frequency = to_signed16(regs[2]) / 100.0
+        data.grid_power = to_signed16(regs[3])
+        data.inverter_voltage = to_signed16(regs[4]) / 10.0
+        data.inverter_current = to_signed16(regs[5]) / 10.0
+        data.inverter_frequency = to_signed16(regs[6]) / 100.0
+        data.inverter_power = to_signed16(regs[7])
+        data.inverter_charge_power = to_signed16(regs[8])
+        data.output_voltage = to_signed16(regs[9]) / 10.0
+        data.output_current = to_signed16(regs[10]) / 10.0
+        data.output_frequency = to_signed16(regs[11]) / 100.0
+        data.output_power = to_signed16(regs[12])
+        data.output_apparent_power = to_signed16(regs[13])
+        data.battery_voltage = to_signed16(regs[14]) / 10.0
+        data.battery_current = to_signed16(regs[15]) / 10.0
+        data.battery_power = to_signed16(regs[16])
+        data.pv_voltage = to_signed16(regs[18]) / 10.0
+        data.pv_current = to_signed16(regs[19]) / 10.0
+        data.pv_power = to_signed16(regs[22])
+        data.pv_charge_power = to_signed16(regs[23])
+        data.load_percent = to_signed16(regs[24])
+        data.dcdc_temp = to_signed16(regs[25])
+        data.inverter_temp = to_signed16(regs[26])
         data.soc = max(0, min(100, regs[28]))
         data.power_flow_status = regs[30]
-        data.battery_current_filtered = signed16(regs[31]) / 10.0
-        data.inverter_charge_current = signed16(regs[32]) / 10.0
-        data.pv_charge_current = signed16(regs[33]) / 10.0
+        data.battery_current_filtered = to_signed16(regs[31]) / 10.0
+        data.inverter_charge_current = to_signed16(regs[32]) / 10.0
+        data.pv_charge_current = to_signed16(regs[33]) / 10.0
         data.last_success = time.time()
         data.realtime_ready = True
         data.connected = True
@@ -1125,7 +1125,7 @@ class ServiceController:
 
     # ── Writable D-Bus handlers ──────────────────────────────────────────────
     def _handle_control_trigger(self, service: VeDbusService, path: str, value: Any, register: int, register_value: int, label: str) -> bool:
-        if int(safe_float(value, 0.0)) != 1:
+        if enum_value(value) != 1:
             return False
         self.client.queue_write(register, [register_value], label)
         GLib.idle_add(self._reset_trigger, service, path)
