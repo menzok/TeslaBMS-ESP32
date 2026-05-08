@@ -55,6 +55,16 @@ Installer actions:
 - creates `/service/dbus-anenji/`
 - starts the runit service
 
+### Bundled manufacturer document
+
+The translated manufacturer protocol document discussed during driver development
+is included in this folder as:
+
+- [`1号通讯协议.html`](1号通讯协议.html)
+
+Open it in a browser to review the source register descriptions and CRC examples
+that informed this staged driver.
+
 ## 4. Configuration
 
 Persistent localsettings are stored under:
