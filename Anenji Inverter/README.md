@@ -60,7 +60,7 @@ Installer actions:
 The translated manufacturer protocol document discussed during driver development
 is included in this folder as:
 
-- [`1号通讯协议.html`](1号通讯协议.html)
+- [`1号通讯协议.html`](1%E5%8F%B7%E9%80%9A%E8%AE%AF%E5%8D%8F%E8%AE%AE.html)
 
 Open it in a browser to review the source register descriptions and CRC examples
 that informed this staged driver.
