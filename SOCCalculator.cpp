@@ -91,7 +91,7 @@ void SOCCalculator::update()
         if (fabsf(onboardA - shuntA) > SOC_DUAL_SENSOR_BIAS_A) {
             if (_dualSensorFaultTicks < 255) ++_dualSensorFaultTicks;
             _dualSensorClearTicks = 0;
-            if (_dualSensorFaultTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
+            if (!_currentSensorFault && _dualSensorFaultTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
                 _currentSensorFault = true;
             }
         }
@@ -99,6 +99,7 @@ void SOCCalculator::update()
             if (_dualSensorClearTicks < 255) ++_dualSensorClearTicks;
             _dualSensorFaultTicks = 0;
             if (_dualSensorClearTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
+                _dualSensorFaultTicks = 0;
                 _currentSensorFault = false;
                 _dualSensorClearTicks = 0;
             }
