@@ -8,8 +8,9 @@ extern BMSModuleManager bms;
 // ─── Coulomb counter auto-reset thresholds ───────────────────────────────────
 #define SOC_CELL_FULL_VOLTAGE       4.18f   // V/cell - declare 100%
 // Voltage at which the coulomb counter is reset and SOC is recalculated from the OCV table.
-// Set below the true 100% cell voltage (4.16-4.19V depending on temp) so that packs that
-// are not charged all the way to 100% (most real-world installations) still get a periodic
+// Set at a conservative 4.16V/cell anchor, below the true 100% voltage range
+// (~4.16-4.19V depending on temp), so packs that do not quite reach a full top charge
+// (most real-world installations) still get a periodic
 // drift-correction anchor. SOC at this point is interpolated from the OCV table between
 // the 95% and 100% rows rather than hardcoded to 100%, giving a best-guess reset value
 // that is more accurate than assuming full charge every time.

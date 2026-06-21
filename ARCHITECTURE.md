@@ -108,7 +108,7 @@ Venus OS Ping-Pong Exchange (every 2 s)
     [0xAA][34-byte payload][CRC_lo][CRC_hi]
     payload includes: voltage, current, SOC, temps, alarm flags,
                       overlordState (0-3), cell voltages, min/max temps,
-                      statusFlags (currentSensorPresent, balancingActive),
+                      statusFlags (currentSensorPresent, balancingActive, currentSensorFault),
                       activeFaultMask
 
   All CVL / CCL / DCL calculations happen on the Pi — the ESP32 sends

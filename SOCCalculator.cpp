@@ -1,5 +1,6 @@
 #include "SOCCalculator.h"
 #include "ExternalCommsLayer.h"
+#include <float.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 SOCCalculator::SOCCalculator()
@@ -86,17 +87,19 @@ void SOCCalculator::update()
         // ── Both sensors available — blend for lower latency, cross-check for faults ──
         float onboardA = _readCurrentAmps();
         float shuntA = ExternalComms.getShuntCurrentAmps();
+        // Favor the onboard sensor because it is local and lower latency, while still
+        // using the shunt as a second opinion to damp drift and catch wiring faults.
         float blendedA = 0.7f * onboardA + 0.3f * shuntA;
 
         if (fabsf(onboardA - shuntA) > SOC_DUAL_SENSOR_BIAS_A) {
-            if (_dualSensorFaultTicks < 255) ++_dualSensorFaultTicks;
+            if (_dualSensorFaultTicks < UINT8_MAX) ++_dualSensorFaultTicks;
             _dualSensorClearTicks = 0;
             if (!_currentSensorFault && _dualSensorFaultTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
                 _currentSensorFault = true;
             }
         }
         else {
-            if (_dualSensorClearTicks < 255) ++_dualSensorClearTicks;
+            if (_dualSensorClearTicks < UINT8_MAX) ++_dualSensorClearTicks;
             _dualSensorFaultTicks = 0;
             if (_dualSensorClearTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
                 _currentSensorFault = false;
@@ -350,7 +353,7 @@ float SOCCalculator::_ocvToSOC(float cellVoltage, float tempC) const {
             // No bracket matched (should not happen with a monotonic table, but guard anyway).
             // Find the closest row by voltage distance and return its SOC value.
             float bestSOC = SOC_LUT_SOC[0];
-            float bestDist = 1e9f;
+            float bestDist = FLT_MAX;
             for (int s = 0; s < SOC_LUT_POINTS; s++) {
                 float v = SOC_LUT_OCV[s][tLo] + tFrac * (SOC_LUT_OCV[s][tHi] - SOC_LUT_OCV[s][tLo]);
                 float d = fabsf(cellVoltage - v);
