@@ -402,6 +402,7 @@ class TeslaBMSSerial:
         # ── Internal ──────────────────────────────────────────────────────────
         self._ser                  = None
         self._port                 = None
+        self._known_port           = None   # port confirmed working; persists across reconnects, cleared only on process restart
         self._lock                 = threading.Lock()
         self._stop_event           = threading.Event()
         self._thread               = None
@@ -548,6 +549,19 @@ class TeslaBMSSerial:
         return None
 
     def _find_port(self) -> "serial.Serial | None":
+        # If we already found the device on a previous connection attempt, retry
+        # that port exclusively.  Never scan other ports — doing so would briefly
+        # open (and disturb) unrelated serial devices on the system.
+        # The full scan only runs once: on a fresh process start when no port has
+        # been confirmed yet (i.e. after a reboot of the Venus OS service).
+        if self._known_port:
+            log.info(f"Trying last known port {self._known_port} …")
+            ser = self._probe_port(self._known_port)
+            if ser is not None:
+                return ser
+            log.info(f"Last known port {self._known_port} did not respond — will retry next cycle.")
+            return None
+
         candidates = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
         if not candidates:
             log.warning("No USB serial ports found.")
@@ -577,9 +591,10 @@ class TeslaBMSSerial:
             return False
 
         with self._lock:
-            self._ser      = ser
-            self._port     = ser.port
-            self.connected = True
+            self._ser        = ser
+            self._port       = ser.port
+            self._known_port = ser.port   # remember for future reconnects
+            self.connected   = True
         log.info(f"✅ Connected on {ser.port}")
         # Block serial-starter from polling this port while we own it.
         self._serial_starter_stop(ser.port)
