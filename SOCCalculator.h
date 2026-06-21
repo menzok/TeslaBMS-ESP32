@@ -7,12 +7,38 @@
 extern BMSModuleManager bms;
 // ─── Coulomb counter auto-reset thresholds ───────────────────────────────────
 #define SOC_CELL_FULL_VOLTAGE       4.18f   // V/cell - declare 100%
+// Voltage at which the coulomb counter is reset and SOC is recalculated from the OCV table.
+// Set at a conservative 4.16V/cell anchor, below the true 100% voltage range
+// (~4.16-4.19V depending on temp), so packs that do not quite reach a full top charge
+// (most real-world installations) still get a periodic
+// drift-correction anchor. SOC at this point is interpolated from the OCV table between
+// the 95% and 100% rows rather than hardcoded to 100%, giving a best-guess reset value
+// that is more accurate than assuming full charge every time.
+#define SOC_CELL_CHARGE_TOP_VOLTAGE 4.16f
 #define SOC_CELL_EMPTY_VOLTAGE      3.00f   // V/cell - declare 0%
 #define SOC_RESET_CONFIRM_TICKS     5       // consecutive ticks before reset fires
 
 // ─── OCV correction ──────────────────────────────────────────────────────────
 #define SOC_OCV_REST_BLEND_RATE     0.05f   // fraction of error corrected per tick at rest
 #define SOC_ZERO_CURRENT_THRESHOLD  0.8f    // amps - below this = pack at rest
+
+// ─── Dual-sensor cross-check (Mode B + C simultaneously active) ──────────────
+// When both an onboard current sensor (currentSensorPresent=true) AND a fresh
+// Venus SmartShunt reading are available, the two readings are cross-checked.
+// If they disagree by more than SOC_DUAL_SENSOR_BIAS_A amps for
+// SOC_DUAL_SENSOR_FAULT_TICKS consecutive update ticks, a sensor fault is flagged.
+// The fault clears automatically when the readings agree again for the same number
+// of consecutive ticks.
+//
+// Tuning notes:
+//   SOC_DUAL_SENSOR_BIAS_A   : Allow for sensor calibration error and the ~2s comms
+//                              delay on the shunt path. 10A is a reasonable starting
+//                              point for a 200-250A pack. Lower for higher sensitivity.
+//   SOC_DUAL_SENSOR_FAULT_TICKS : At 1Hz update rate, 15 ticks = 15 seconds of
+//                                 sustained disagreement before flagging. Prevents
+//                                 false alarms on transients and shunt comms delays.
+#define SOC_DUAL_SENSOR_BIAS_A      10.0f   // A — allowed disagreement between sensors
+#define SOC_DUAL_SENSOR_FAULT_TICKS 15      // consecutive ticks before fault fires
 
 // ─── ADC ─────────────────────────────────────────────────────────────────────
 #define SOC_ADC_OVERSAMPLE          8       // samples averaged per current reading
@@ -120,10 +146,15 @@ static const float SOC_LUT_TEMP_POINTS[SOC_LUT_TEMPS] = {
 // [SOC_point][temp_col]  ← REAL DATA  HPPC rests
 static const float SOC_LUT_OCV[SOC_LUT_POINTS][SOC_LUT_TEMPS] = {
     //   -10°C     10°C      25°C      40°C
-    { 3.3274f,  3.1611f,  3.0364f,  2.9789f },  //   0%   (extrapolated data)
-    { 3.3070f,  3.1413f,  3.1198f,  3.1182f },  //   5%
-    { 3.4013f,  3.2065f,  3.2541f,  3.2423f },  //  10%
-    { 3.3713f,  3.3339f,  3.3667f,  3.3539f },  //  15%
+    // Corrected from the raw dataset above: 10% -10°C is interpolated from 12.6%=3.3184 and
+    // 16.9%=3.4131; 15% -10°C is extrapolated from 16.9%=3.4131 and 21.3%=3.4616; 5% -10°C
+    // is extrapolated from the corrected 10%→15% slope; 5% 10°C is interpolated from
+    // 7.9%=3.1513 and 12.5%=3.2721; the 0% row is extrapolated one 5% step below 5% using
+    // each column's corrected 5%→10% slope. Raw data block above remains unchanged as reference.
+    { 3.0409f,  2.9438f,  2.9800f,  2.9400f },  //   0%  [extrapolated] [extrapolated] [extrapolated] [extrapolated]
+    { 3.1510f,  3.0751f,  3.1198f,  3.1182f },  //   5%  [extrapolated] [interpolated] [measured]     [measured]
+    { 3.2611f,  3.2065f,  3.2541f,  3.2423f },  //  10%  [interpolated] [measured]     [interpolated] [interpolated]
+    { 3.3922f,  3.3339f,  3.3667f,  3.3539f },  //  15%  [extrapolated] [interpolated] [interpolated] [interpolated]
     { 3.4473f,  3.4300f,  3.4512f,  3.4457f },  //  20%
     { 3.5422f,  3.5419f,  3.5517f,  3.5396f },  //  30%
     { 3.6314f,  3.6467f,  3.6598f,  3.6529f },  //  40%
@@ -167,6 +198,8 @@ public:
     // SOC as 0-100 byte for BatterySummary.soc
     uint8_t getSOCByte() const;
 
+    bool getCurrentSensorFault() const;
+
 private:
     // ── Internal ESP32 ADC constants ─────────────
     static constexpr float ADC_VREF_11DB = 3.9f;    // full scale at ADC_11db attenuation
@@ -181,6 +214,9 @@ private:
     bool          _initialised;
     unsigned long _lastSaveMs;
     float         _currentSensorAdaptiveOffsetV;
+    uint8_t       _dualSensorFaultTicks;
+    uint8_t       _dualSensorClearTicks;
+    bool          _currentSensorFault;
 
     // ── Endpoint reset confirmation ───────────────────────────────────────
     uint8_t       _fullConfirmTicks;

@@ -32,7 +32,7 @@
 #  [20]    numModules          uint8   total modules detected
 #  [21]    numStrings          uint8   parallel string count
 #  [22-23] overCurrentThresh   uint16  × 10    → A   (0.1A res)
-#  [24]    statusFlags         uint8   bit0=currentSensorPresent bit1=balancingActive
+#  [24]    statusFlags         uint8   bit0=currentSensorPresent bit1=balancingActive bit2=currentSensorFault
 #  [25]    activeFaultMask     uint8   1<<FaultEntry::Type per active fault
 #  [26-27] lowestCellV         uint16  × 1000  → V   (1 mV res)
 #  [28-29] highestCellV        uint16  × 1000  → V   (1 mV res)
@@ -114,13 +114,6 @@ from vedbus import VeDbusService           # noqa: E402
 
 AH_PER_MODULE    = 232.0   # Ah per Tesla module (6S 74P, 232 Ah)
 CELLS_PER_MODULE = 6       # Tesla module is 6S — 6 cells in series per module
-
-# ── Current sensor ────────────────────────────────────────────────────────────
-# Set to True  if a current sensor is wired to the ESP32.
-# Set to False if no current sensor is present (e.g. using a SmartShunt only).
-# When False, /Dc/0/Current is NOT published so the SmartShunt reading on
-# D-Bus is used by DVCC instead of being overwritten with a zero/stale value.
-HAS_CURRENT_SENSOR = False
 
 # ── Charge / discharge limits — hard-coded for this installation ──────────────
 # These are the values used at runtime.  To change them, edit here and redeploy.
@@ -206,6 +199,7 @@ def contactor_state_name(state: int) -> str:
 # statusFlags bits (payload[24])
 STATUS_CURRENT_SENSOR = (1 << 0)
 STATUS_BALANCING      = (1 << 1)
+STATUS_SENSOR_FAULT   = (1 << 2)
 
 # activeFaultMask bits (payload[25]) — 1<<FaultEntry::Type
 # Type enum: None=0, OverVoltage=1, UnderVoltage=2, OverTemperature=3,
@@ -380,7 +374,7 @@ class TeslaBMSSerial:
         self.contactor_state = 0
 
         # ── Extended telemetry (v2.0) ─────────────────────────────────────────
-        self.status_flags       = 0      # bit0=currentSensorPresent bit1=balancingActive
+        self.status_flags       = 0      # bit0=currentSensorPresent bit1=balancingActive bit2=currentSensorFault
         self.active_fault_mask  = 0      # 1<<FaultEntry::Type per active fault
         self.lowest_cell_v      = 0.0
         self.highest_cell_v     = 0.0
@@ -408,6 +402,7 @@ class TeslaBMSSerial:
         # ── Internal ──────────────────────────────────────────────────────────
         self._ser                  = None
         self._port                 = None
+        self._known_port           = None   # port confirmed working; persists across reconnects, cleared only on process restart
         self._lock                 = threading.Lock()
         self._stop_event           = threading.Event()
         self._thread               = None
@@ -432,6 +427,10 @@ class TeslaBMSSerial:
     @property
     def balancing_active(self) -> bool:
         return bool(self.status_flags & STATUS_BALANCING)
+
+    @property
+    def sensor_fault(self) -> bool:
+        return bool(self.status_flags & STATUS_SENSOR_FAULT)
 
     @property
     def charge_fet(self) -> bool:
@@ -550,6 +549,19 @@ class TeslaBMSSerial:
         return None
 
     def _find_port(self) -> "serial.Serial | None":
+        # If we already found the device on a previous connection attempt, retry
+        # that port exclusively.  Never scan other ports — doing so would briefly
+        # open (and disturb) unrelated serial devices on the system.
+        # The full scan only runs once: on a fresh process start when no port has
+        # been confirmed yet (i.e. after a reboot of the Venus OS service).
+        if self._known_port:
+            log.info(f"Trying last known port {self._known_port} …")
+            ser = self._probe_port(self._known_port)
+            if ser is not None:
+                return ser
+            log.info(f"Last known port {self._known_port} did not respond — will retry next cycle.")
+            return None
+
         candidates = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
         if not candidates:
             log.warning("No USB serial ports found.")
@@ -579,9 +591,10 @@ class TeslaBMSSerial:
             return False
 
         with self._lock:
-            self._ser      = ser
-            self._port     = ser.port
-            self.connected = True
+            self._ser        = ser
+            self._port       = ser.port
+            self._known_port = ser.port   # remember for future reconnects
+            self.connected   = True
         log.info(f"✅ Connected on {ser.port}")
         # Block serial-starter from polling this port while we own it.
         self._serial_starter_stop(ser.port)
@@ -935,6 +948,7 @@ def build_dbus_service(bus, cfg: "BmsConfig") -> VeDbusService:
     svc.add_path("/Alarms/HighChargeCurrent",    None, writeable=True)
     svc.add_path("/Alarms/HighDischargeCurrent", None, writeable=True)
     svc.add_path("/Alarms/InternalFailure",      None, writeable=True)
+    svc.add_path("/Alarms/CurrentSensorFault",   None, writeable=True)
     svc.add_path("/Alarms/BmsCable",             None, writeable=True)
 
     # ── History ───────────────────────────────────────────────────────────────
@@ -1213,7 +1227,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig, shunt: "Shu
     svc["/Soc"]              = bms.soc
     svc["/Dc/0/Voltage"]     = round(bms.voltage,     2)
    
-    if HAS_CURRENT_SENSOR:
+    if bms.current_sensor_present:
         svc["/Dc/0/Power"]   = round(bms.power, 0)
         svc["/Dc/0/Current"] = round(bms.current, 2)
     else:
@@ -1295,6 +1309,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig, shunt: "Shu
     svc["/Alarms/LowTemperature"]        = bms.alarm_level(ALARM_UNDER_TEMP)
     svc["/Alarms/HighChargeCurrent"]     = bms.alarm_level(ALARM_OVER_CURRENT)
     svc["/Alarms/HighDischargeCurrent"]  = bms.alarm_level(ALARM_OVER_CURRENT)
+    svc["/Alarms/CurrentSensorFault"]    = ALARM_ALARM if bms.sensor_fault else ALARM_OK
 
     # InternalFailure only for a genuine fault — NOT for clean Shutdown (item 11)
     svc["/Alarms/InternalFailure"] = (

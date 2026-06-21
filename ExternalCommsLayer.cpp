@@ -91,6 +91,7 @@ void ExternalCommsLayer::buildPayload(uint8_t* payload) {
     uint8_t statusFlags = 0x00;
     if (eepromdata.currentSensorPresent) statusFlags |= STATUS_FLAG_CURRENT_SENSOR;
     if (bms.isAnyBalancing())            statusFlags |= STATUS_FLAG_BALANCING;
+    if (socCalculator.getCurrentSensorFault()) statusFlags |= STATUS_FLAG_SENSOR_FAULT;
 
     // ── Active fault mask — 1<<type for each fault entry that hasn't been cleared
     // FaultEntry::Type: None=0, OverVoltage=1, UnderVoltage=2, OverTemperature=3,

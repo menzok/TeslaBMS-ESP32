@@ -215,7 +215,8 @@ BMSUtil occur outside this class.
 This class is responsible for calculating and maintaining the State of Charge (SOC) of the entire battery pack. It implements a three-path estimation strategy:
 
 - **When a current sensor is installed** (`eepromdata.currentSensorPresent == true`): primary coulomb counting with trapezoidal integration + slow OCV-based drift
-  correction while the pack is at rest.
+  correction while the pack is at rest. If fresh Venus shunt data is also available at the same time, the ESP32 uses a 70/30 onboard/shunt blend for current,
+  cross-checks the two sensors against a configurable bias window, and raises a sensor-fault status bit if the disagreement persists for the configured number of ticks.
 - **When no internal sensor but Venus shunt data is fresh** (`ExternalComms.isShuntDataFresh()`): coulomb counting using the SmartShunt current value injected by
   the Venus OS driver via the ping-pong frame. Data is considered fresh only when `staleness == 0` **and** the last frame was received within `SHUNT_MAX_AGE_MS`
   (6 000 ms ≈ 3 missed polls at 2 s intervals).
@@ -245,6 +246,7 @@ The main SOC calculation routine. Called periodically (every `SOC_UPDATE_INTERVA
 - Reads the latest pack summary from `bms.getBatterySummary()` to get pack voltage and average temperature.
 - **Path 1 — Internal sensor present:**
   - Reads and applies IIR low-pass filtering to the current measurement.
+  - If fresh Venus shunt data is also available, blends 70% onboard + 30% shunt current for coulomb counting and cross-checks the two sources for a persistent fault.
   - Performs coulomb counting (trapezoidal integration of current over elapsed time).
   - When pack current is near zero (< `SOC_ZERO_CURRENT_THRESHOLD`), slowly blends the coulomb-count SOC toward the OCV lookup result to correct long-term drift.
 - **Path 2 — Venus shunt data fresh (`ExternalComms.isShuntDataFresh()`):**
@@ -252,8 +254,9 @@ The main SOC calculation routine. Called periodically (every `SOC_UPDATE_INTERVA
   - Falls through to path 3 if `isShuntDataFresh()` returns false (stale data, Venus offline, or staleness counter > 0).
 - **Path 3 — No usable current source:**
   - Applies pure OCV blending every update. Filtered current state is reset so it does not drift.
-- Applies "hard reset" logic: if average cell voltage stays above `SOC_CELL_FULL_VOLTAGE` (or below `SOC_CELL_EMPTY_VOLTAGE`) for `SOC_RESET_CONFIRM_TICKS` consecutive
-  calls, it forces SOC to 100% or 0% and resets the coulomb counter.
+- Applies endpoint reset logic: if average cell voltage stays above `SOC_CELL_CHARGE_TOP_VOLTAGE` for `SOC_RESET_CONFIRM_TICKS` consecutive calls, it recalculates SOC
+  from the OCV table at that top-charge anchor and resets the coulomb counter; if voltage stays below `SOC_CELL_EMPTY_VOLTAGE`, it forces SOC to 0% and resets the
+  coulomb counter.
 - Always clamps `eepromdata.socPercent` between 0 and 100.
 
 **`float getPackCurrentAmps() const`**
@@ -623,7 +626,7 @@ no spin-waits or `available()` polling.
 | Overlord state (0–3) | `Overlord.getState()` — 0=Normal, 1=Fault, 2=Storage, **3=Shutdown** |
 | Contactor state | `contactor.getState()` |
 | EEPROM thresholds | `eepromdata.*` directly |
-| statusFlags (bit0=currentSensorPresent, bit1=balancingActive) | `eepromdata.currentSensorPresent`, `bms.isAnyBalancing()` |
+| statusFlags (bit0=currentSensorPresent, bit1=balancingActive, bit2=currentSensorFault) | `eepromdata.currentSensorPresent`, `bms.isAnyBalancing()`, `socCalculator.getCurrentSensorFault()` |
 | activeFaultMask | Fault log entries with `clearedTimestamp == 0` → `1 << FaultEntry::Type` |
 | lowestCellV / highestCellV | `bms.getLowestCellVoltage()` / `bms.getHighestCellVoltage()` |
 | minTemp / maxTemp | `bms.getMinTemperature()` / `bms.getMaxTemperature()` |
@@ -664,6 +667,7 @@ Used by `SOCCalculator::update()` to decide whether the Venus shunt path is usab
 | `OVERLORD_STATE_SHUTDOWN` | `3` | Clean shutdown — distinct from Fault |
 | `STATUS_FLAG_CURRENT_SENSOR` | `bit 0` | `statusFlags`: internal current sensor fitted |
 | `STATUS_FLAG_BALANCING` | `bit 1` | `statusFlags`: at least one cell balancing |
+| `STATUS_FLAG_SENSOR_FAULT` | `bit 2` | `statusFlags`: persistent disagreement between onboard and shunt current sensors |
 | `ALARM_OVER_VOLTAGE` | `bit 0` | `alarmFlags`: cell OV |
 | `ALARM_UNDER_VOLTAGE` | `bit 1` | `alarmFlags`: cell UV |
 | `ALARM_OVER_TEMP` | `bit 2` | `alarmFlags`: pack OT |
