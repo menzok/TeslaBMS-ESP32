@@ -99,7 +99,6 @@ void SOCCalculator::update()
             if (_dualSensorClearTicks < 255) ++_dualSensorClearTicks;
             _dualSensorFaultTicks = 0;
             if (_dualSensorClearTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
-                _dualSensorFaultTicks = 0;
                 _currentSensorFault = false;
                 _dualSensorClearTicks = 0;
             }
