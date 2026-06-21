@@ -115,13 +115,6 @@ from vedbus import VeDbusService           # noqa: E402
 AH_PER_MODULE    = 232.0   # Ah per Tesla module (6S 74P, 232 Ah)
 CELLS_PER_MODULE = 6       # Tesla module is 6S — 6 cells in series per module
 
-# ── Current sensor ────────────────────────────────────────────────────────────
-# Set to True  if a current sensor is wired to the ESP32.
-# Set to False if no current sensor is present (e.g. using a SmartShunt only).
-# When False, /Dc/0/Current is NOT published so the SmartShunt reading on
-# D-Bus is used by DVCC instead of being overwritten with a zero/stale value.
-HAS_CURRENT_SENSOR = False
-
 # ── Charge / discharge limits — hard-coded for this installation ──────────────
 # These are the values used at runtime.  To change them, edit here and redeploy.
 MAX_CHARGE_CURRENT    = 200.0   # A
@@ -1219,7 +1212,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig, shunt: "Shu
     svc["/Soc"]              = bms.soc
     svc["/Dc/0/Voltage"]     = round(bms.voltage,     2)
    
-    if HAS_CURRENT_SENSOR:
+    if bms.current_sensor_present:
         svc["/Dc/0/Power"]   = round(bms.power, 0)
         svc["/Dc/0/Current"] = round(bms.current, 2)
     else:
