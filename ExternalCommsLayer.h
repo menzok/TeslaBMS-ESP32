@@ -20,6 +20,7 @@
 // ─── statusFlags byte (payload[24]) ──────────────────────────────────────────
 #define STATUS_FLAG_CURRENT_SENSOR  (1 << 0)  // bit 0: currentSensorPresent
 #define STATUS_FLAG_BALANCING       (1 << 1)  // bit 1: any cell currently balancing
+#define STATUS_FLAG_SENSOR_FAULT    (1 << 2)  // bit 2: dual current-sensor cross-check fault
 
 // ─── overlordState encoding (payload[12]) ────────────────────────────────────
 #define OVERLORD_STATE_NORMAL   0
@@ -73,7 +74,7 @@
 //  [20]    numModules          uint8       bms.getNumberOfModules()
 //  [21]    numStrings          uint8       eepromdata.parallelStrings
 //  [22-23] overCurrentThresh   uint16 BE   EEPROM OVERCURRENT × 10 → A  (0.1A res)
-//  [24]    statusFlags         uint8       bit0=currentSensorPresent bit1=balancingActive
+//  [24]    statusFlags         uint8       bit0=currentSensorPresent bit1=balancingActive bit2=currentSensorFault
 //  [25]    activeFaultMask     uint8       1<<FaultEntry::Type for each active fault
 //  [26-27] lowestCellV         uint16 BE   lowest cell voltage × 1000 → V (1 mV res)
 //  [28-29] highestCellV        uint16 BE   highest cell voltage × 1000 → V (1 mV res)

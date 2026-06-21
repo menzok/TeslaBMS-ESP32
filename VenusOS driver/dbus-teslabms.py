@@ -32,7 +32,7 @@
 #  [20]    numModules          uint8   total modules detected
 #  [21]    numStrings          uint8   parallel string count
 #  [22-23] overCurrentThresh   uint16  × 10    → A   (0.1A res)
-#  [24]    statusFlags         uint8   bit0=currentSensorPresent bit1=balancingActive
+#  [24]    statusFlags         uint8   bit0=currentSensorPresent bit1=balancingActive bit2=currentSensorFault
 #  [25]    activeFaultMask     uint8   1<<FaultEntry::Type per active fault
 #  [26-27] lowestCellV         uint16  × 1000  → V   (1 mV res)
 #  [28-29] highestCellV        uint16  × 1000  → V   (1 mV res)
@@ -206,6 +206,7 @@ def contactor_state_name(state: int) -> str:
 # statusFlags bits (payload[24])
 STATUS_CURRENT_SENSOR = (1 << 0)
 STATUS_BALANCING      = (1 << 1)
+STATUS_SENSOR_FAULT   = (1 << 2)
 
 # activeFaultMask bits (payload[25]) — 1<<FaultEntry::Type
 # Type enum: None=0, OverVoltage=1, UnderVoltage=2, OverTemperature=3,
@@ -380,7 +381,7 @@ class TeslaBMSSerial:
         self.contactor_state = 0
 
         # ── Extended telemetry (v2.0) ─────────────────────────────────────────
-        self.status_flags       = 0      # bit0=currentSensorPresent bit1=balancingActive
+        self.status_flags       = 0      # bit0=currentSensorPresent bit1=balancingActive bit2=currentSensorFault
         self.active_fault_mask  = 0      # 1<<FaultEntry::Type per active fault
         self.lowest_cell_v      = 0.0
         self.highest_cell_v     = 0.0
@@ -432,6 +433,10 @@ class TeslaBMSSerial:
     @property
     def balancing_active(self) -> bool:
         return bool(self.status_flags & STATUS_BALANCING)
+
+    @property
+    def sensor_fault(self) -> bool:
+        return bool(self.status_flags & STATUS_SENSOR_FAULT)
 
     @property
     def charge_fet(self) -> bool:
@@ -935,6 +940,7 @@ def build_dbus_service(bus, cfg: "BmsConfig") -> VeDbusService:
     svc.add_path("/Alarms/HighChargeCurrent",    None, writeable=True)
     svc.add_path("/Alarms/HighDischargeCurrent", None, writeable=True)
     svc.add_path("/Alarms/InternalFailure",      None, writeable=True)
+    svc.add_path("/Alarms/CurrentSensorFault",   None, writeable=True)
     svc.add_path("/Alarms/BmsCable",             None, writeable=True)
 
     # ── History ───────────────────────────────────────────────────────────────
@@ -1295,6 +1301,7 @@ def publish(bms: TeslaBMSSerial, svc: VeDbusService, cfg: BmsConfig, shunt: "Shu
     svc["/Alarms/LowTemperature"]        = bms.alarm_level(ALARM_UNDER_TEMP)
     svc["/Alarms/HighChargeCurrent"]     = bms.alarm_level(ALARM_OVER_CURRENT)
     svc["/Alarms/HighDischargeCurrent"]  = bms.alarm_level(ALARM_OVER_CURRENT)
+    svc["/Alarms/CurrentSensorFault"]    = ALARM_ALARM if bms.sensor_fault else ALARM_OK
 
     # InternalFailure only for a genuine fault — NOT for clean Shutdown (item 11)
     svc["/Alarms/InternalFailure"] = (

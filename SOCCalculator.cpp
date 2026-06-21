@@ -14,6 +14,9 @@ SOCCalculator::SOCCalculator()
     , _emptyConfirmTicks(0)
     , _lastSaveMs(0)
     , _currentSensorAdaptiveOffsetV(0.0f)
+    , _dualSensorFaultTicks(0)
+    , _dualSensorClearTicks(0)
+    , _currentSensorFault(false)
 {
 }
 
@@ -75,13 +78,35 @@ void SOCCalculator::update()
     BatterySummary summary = bms.getBatterySummary();
     float cellVoltage = summary.voltage / (float)_cellsInSeries;
     float cellTempC = (float)summary.avgTemp - 40.0f;   // decode +40 offset
+    bool shuntFresh = ExternalComms.isShuntDataFresh();
+    float preBlendSOC = eepromdata.socPercent;
+    bool havePreBlendSOC = false;
 
-    if (eepromdata.currentSensorPresent) {
+    if (eepromdata.currentSensorPresent && shuntFresh) {
+        // ── Both sensors available — blend for lower latency, cross-check for faults ──
+        float onboardA = _readCurrentAmps();
+        float shuntA = ExternalComms.getShuntCurrentAmps();
+        float blendedA = 0.7f * onboardA + 0.3f * shuntA;
+
+        if (fabsf(onboardA - shuntA) > SOC_DUAL_SENSOR_BIAS_A) {
+            if (_dualSensorFaultTicks < 255) ++_dualSensorFaultTicks;
+            _dualSensorClearTicks = 0;
+            if (_dualSensorFaultTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
+                _currentSensorFault = true;
+            }
+        }
+        else {
+            if (_dualSensorClearTicks < 255) ++_dualSensorClearTicks;
+            _dualSensorFaultTicks = 0;
+            if (_dualSensorClearTicks >= SOC_DUAL_SENSOR_FAULT_TICKS) {
+                _currentSensorFault = false;
+                _dualSensorClearTicks = 0;
+            }
+        }
 
         // ── Read and filter current ───────────────────────────────────────
         // IIR low-pass (α=0.3) smooths ADC noise without lagging badly
-        float rawA = _readCurrentAmps();
-        _filteredCurrentA = 0.3f * rawA + 0.7f * _filteredCurrentA;
+        _filteredCurrentA = 0.3f * blendedA + 0.7f * _filteredCurrentA;
 
         // ── Coulomb counting (trapezoidal) ────────────────────────────────
         // Average current over the elapsed window, integrate to Ah
@@ -94,6 +119,8 @@ void SOCCalculator::update()
         float deltaSOC = (deltaAh / _packCapacityAh) * 100.0f;
         eepromdata.socPercent += deltaSOC;
         eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
+        preBlendSOC = eepromdata.socPercent;
+        havePreBlendSOC = true;
 
         // ── OCV blend correction at rest ──────────────────────────────────
         // When current is near zero the OCV lookup is valid.
@@ -105,9 +132,37 @@ void SOCCalculator::update()
                 + SOC_OCV_REST_BLEND_RATE * (ocvSoc - eepromdata.socPercent);
             eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
         }
-
     }
-    else if (ExternalComms.isShuntDataFresh()) {
+    else if (eepromdata.currentSensorPresent) {
+
+        // ── OCV blend correction at rest ──────────────────────────────────
+        // When current is near zero the OCV lookup is valid.
+        // Nudge CC result toward OCV slowly to prevent long-term drift
+        // without jumping during load transients.
+        float rawA = _readCurrentAmps();
+        _filteredCurrentA = 0.3f * rawA + 0.7f * _filteredCurrentA;
+
+        float avgCurrentA = (_lastCurrentA + _filteredCurrentA) * 0.5f;
+        _lastCurrentA = _filteredCurrentA;
+
+        float deltaAh = avgCurrentA * ((float)elapsed / 3600000.0f);
+        eepromdata.coulombCountAh += deltaAh;
+
+        float deltaSOC = (deltaAh / _packCapacityAh) * 100.0f;
+        eepromdata.socPercent += deltaSOC;
+        eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
+        preBlendSOC = eepromdata.socPercent;
+        havePreBlendSOC = true;
+
+        // OCV blend at rest
+        if (fabsf(_filteredCurrentA) < SOC_ZERO_CURRENT_THRESHOLD) {
+            float ocvSoc = _ocvToSOC(cellVoltage, cellTempC);
+            eepromdata.socPercent = eepromdata.socPercent
+                + SOC_OCV_REST_BLEND_RATE * (ocvSoc - eepromdata.socPercent);
+            eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
+        }
+    }
+    else if (shuntFresh) {
         // ── No internal sensor — use Venus shunt/SCS current ─────────────
         // Venus embeds the SmartShunt reading in every CMD_SEND_DATA request.
         // isShuntDataFresh() returns true only while staleness==0 AND the last
@@ -133,6 +188,9 @@ void SOCCalculator::update()
             eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
         }
 
+        _dualSensorFaultTicks = 0;
+        _dualSensorClearTicks = 0;
+        _currentSensorFault = false;
     }
     else {
         // ── No usable current source (no sensor, or shunt data older than
@@ -143,14 +201,21 @@ void SOCCalculator::update()
         eepromdata.socPercent = _clampSOC(eepromdata.socPercent);
         _filteredCurrentA = 0.0f;
         _lastCurrentA = 0.0f;
+        _dualSensorFaultTicks = 0;
+        _dualSensorClearTicks = 0;
+        _currentSensorFault = false;
     }
 
     // ── Hard resets at known endpoints ────────────────────────────────────
     // Require N consecutive ticks to guard against noise spikes.
 
-    if (cellVoltage >= SOC_CELL_FULL_VOLTAGE) {
+    if (cellVoltage >= SOC_CELL_CHARGE_TOP_VOLTAGE) {
         if (++_fullConfirmTicks >= SOC_RESET_CONFIRM_TICKS) {
-            eepromdata.socPercent = 100.0f;
+            // Most real-world installations do not charge fully to the true 100% cell
+            // voltage. Using the OCV table here gives a best-guess reset anchor at the
+            // actual reached voltage and avoids a sudden jump to 100% when the charger
+            // only reaches 4.16 V/cell.
+            eepromdata.socPercent = _ocvToSOC(cellVoltage, cellTempC);
             eepromdata.coulombCountAh = 0.0f;
             _fullConfirmTicks = 0;
         }
@@ -176,15 +241,18 @@ void SOCCalculator::update()
     }
     // ── Adaptive current sensor drift correction (OCV-guided) ─────────────
     // Only adjust when the pack has been at rest long enough for OCV to be trustworthy
-    if (fabsf(_filteredCurrentA) < SOC_ZERO_CURRENT_THRESHOLD) {
+    if (eepromdata.currentSensorPresent
+        && havePreBlendSOC
+        && fabsf(_filteredCurrentA) < SOC_ZERO_CURRENT_THRESHOLD) {
         float ocvSoc = _ocvToSOC(cellVoltage, cellTempC);
-        float socError = ocvSoc - eepromdata.socPercent;
+        float socError = ocvSoc - preBlendSOC;
 
         // Only trim if error is consistent and meaningful
         if (fabsf(socError) > 0.3f) {
-            // Very slow adjustment (~0.0003 V per second at 1 Hz), clamped to ±0.1 V
+            // Correct in the sensor's voltage domain: ~0.7 mV per 1% SOC error, with a
+            // ±0.1 V clamp so long rests can trim bias without letting the adaptive term run away.
             _currentSensorAdaptiveOffsetV = constrain(
-                _currentSensorAdaptiveOffsetV + 0.0003f * socError, -0.1f, 0.1f);
+                _currentSensorAdaptiveOffsetV + 0.0007f * socError, -0.1f, 0.1f);
         }
     }
 }
@@ -197,6 +265,11 @@ float SOCCalculator::getPackCurrentAmps() const {
 // ─────────────────────────────────────────────────────────────────────────────
 uint8_t SOCCalculator::getSOCByte() const {
     return (uint8_t)constrain((int)eepromdata.socPercent, 0, 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+bool SOCCalculator::getCurrentSensorFault() const {
+    return _currentSensorFault;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,7 +346,17 @@ float SOCCalculator::_ocvToSOC(float cellVoltage, float tempC) const {
 
             if (cellVoltage <= ocvBottom) return  0.0f;
             if (cellVoltage >= ocvTop)    return 100.0f;
-            return eepromdata.socPercent;
+
+            // No bracket matched (should not happen with a monotonic table, but guard anyway).
+            // Find the closest row by voltage distance and return its SOC value.
+            float bestSOC = SOC_LUT_SOC[0];
+            float bestDist = 1e9f;
+            for (int s = 0; s < SOC_LUT_POINTS; s++) {
+                float v = SOC_LUT_OCV[s][tLo] + tFrac * (SOC_LUT_OCV[s][tHi] - SOC_LUT_OCV[s][tLo]);
+                float d = fabsf(cellVoltage - v);
+                if (d < bestDist) { bestDist = d; bestSOC = SOC_LUT_SOC[s]; }
+            }
+            return _clampSOC(bestSOC);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
